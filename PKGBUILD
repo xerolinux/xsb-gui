@@ -6,7 +6,9 @@ pkgdesc="XeroLinux Limine/SecureBoot Enabler"
 arch=('x86_64')
 url="https://github.com/xerolinux/xsb-gui"
 license=('GPL-3.0-or-later')
-depends=('python-pyqt6' 'polkit' 'limine' 'limine-mkinitcpio-hook' 'sbctl' 'efibootmgr')
+depends=('python-pyqt6' 'polkit' 'sbctl' 'efibootmgr')
+optdepends=('limine: installed automatically by xsb-helper migrate when you choose to migrate'
+            'limine-mkinitcpio-hook: installed automatically by xsb-helper migrate when you choose to migrate')
 install="${pkgname}.install"
 source=()
 sha256sums=()

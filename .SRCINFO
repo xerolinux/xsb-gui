@@ -8,9 +8,9 @@ pkgbase = xsb-gui
 	license = GPL-3.0-or-later
 	depends = python-pyqt6
 	depends = polkit
-	depends = limine
-	depends = limine-mkinitcpio-hook
 	depends = sbctl
 	depends = efibootmgr
+	optdepends = limine: installed automatically by xsb-helper migrate when you choose to migrate
+	optdepends = limine-mkinitcpio-hook: installed automatically by xsb-helper migrate when you choose to migrate
 
 pkgname = xsb-gui

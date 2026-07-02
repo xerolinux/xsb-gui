@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+echo '{"event":"migrate_step","level":"info","message":"Installing Limine"}'
+sleep 30
+echo '{"event":"migrate_done","level":"info","message":"Migration to Limine complete."}'
+exit 0

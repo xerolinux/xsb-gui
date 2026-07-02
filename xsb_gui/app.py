@@ -27,8 +27,35 @@ HELPER_PATH = _resolve_helper_path()
 ICON_PATH = Path(__file__).resolve().parent / "assets" / "xsb-gui.png"
 
 
+class _Wizard(QWizard):
+    """QWizard that stops any in-flight privileged helper process before
+    the window is allowed to close, so closing mid-run doesn't leave an
+    orphaned root process with no cleanup.
+
+    Enumerates registered pages generically via pageIds()/page() and
+    duck-types on a "runner" attribute rather than importing specific page
+    classes, so this keeps working if more runner-backed pages are added
+    later.
+
+    DonePage doesn't inherit _RunnerPage (its "Reboot to BIOS" handler is a
+    one-off action, not a full runner-driven page), so it stores its
+    apply-splash HelperRunner under "_splash_runner" instead of "runner".
+    Both attribute names are checked so a splash run in progress also gets
+    stopped when the window closes.
+    """
+
+    def closeEvent(self, event):
+        for page_id in self.pageIds():
+            page = self.page(page_id)
+            for attr_name in ("runner", "_splash_runner"):
+                runner = getattr(page, attr_name, None)
+                if runner is not None and hasattr(runner, "stop"):
+                    runner.stop()
+        super().closeEvent(event)
+
+
 def build_wizard(helper_path=HELPER_PATH, use_pkexec=True):
-    wizard = QWizard()
+    wizard = _Wizard()
     wizard.setWindowTitle("XeroLinux Limine/SecureBoot Enabler")
     wizard.setMinimumSize(720, 520)
     if ICON_PATH.exists():

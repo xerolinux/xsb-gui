@@ -24,7 +24,7 @@ class SecureBootPage(_RunnerPage):
 
     def _on_event(self, event):
         super()._on_event(event)
-        event_name = event["event"]
+        event_name = event.get("event", "")
         if event_name == "secureboot_already_active":
             self._complete = True
             self._needs_reboot = False
@@ -32,11 +32,11 @@ class SecureBootPage(_RunnerPage):
         elif event_name == "secureboot_needs_reboot":
             self._complete = True
             self._needs_reboot = True
-            self._outcome_message = event["message"]
+            self._outcome_message = event.get("message", "")
             self.completeChanged.emit()
         elif event_name == "error":
             self._had_error = True
-            self._error_message = event["message"]
+            self._error_message = event.get("message", "")
             self.wizard().next()
 
     def nextId(self):

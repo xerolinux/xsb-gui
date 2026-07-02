@@ -141,32 +141,188 @@ setup() {
 }
 
 @test "resolve_root_cmdline_params non-LUKS uses root=UUID=" {
-  result="$(resolve_root_cmdline_params "false" "none" "root-uuid-1234" "")"
+  result="$(resolve_root_cmdline_params "false" "none" "root-uuid-1234" "" "" "ext4" "")"
   [ "$result" = "root=UUID=root-uuid-1234" ]
 }
 
 @test "resolve_root_cmdline_params LUKS with sd-encrypt uses rd.luks.name" {
-  result="$(resolve_root_cmdline_params "true" "sd-encrypt" "root-uuid" $'cryptroot UUID=luks-uuid-5678 none luks')"
+  result="$(resolve_root_cmdline_params "true" "sd-encrypt" "root-uuid" $'cryptroot UUID=luks-uuid-5678 none luks' "" "ext4" "" "")"
   [ "$result" = "rd.luks.name=luks-uuid-5678=cryptroot root=/dev/mapper/cryptroot" ]
 }
 
 @test "resolve_root_cmdline_params LUKS with encrypt uses cryptdevice=" {
-  result="$(resolve_root_cmdline_params "true" "encrypt" "root-uuid" $'cryptroot UUID=luks-uuid-5678 none luks')"
+  result="$(resolve_root_cmdline_params "true" "encrypt" "root-uuid" $'cryptroot UUID=luks-uuid-5678 none luks' "" "ext4" "" "")"
   [ "$result" = "cryptdevice=UUID=luks-uuid-5678:cryptroot root=/dev/mapper/cryptroot" ]
 }
 
-@test "build_limine_defaults_content includes params and fixed base flags" {
-  result="$(build_limine_defaults_content "root=UUID=root-uuid-1234")"
-  [[ "$result" == *"KERNEL_CMDLINE[default]="* ]]
-  [[ "$result" == *"quiet nowatchdog loglevel=3"* ]]
-  [[ "$result" == *"root=UUID=root-uuid-1234"* ]]
+@test "resolve_root_cmdline_params REGRESSION GUARD: plain LUKS (no LVM) is completely unchanged when pvs reports no VG" {
+  # pvs_output (8th param) explicitly empty == the LUKS mapper is NOT an
+  # LVM PV. This must preserve the exact pre-fix root=/dev/mapper/... output.
+  result="$(resolve_root_cmdline_params "true" "encrypt" "root-uuid" $'cryptroot UUID=luks-uuid-5678 none luks' "/dev/mapper/cryptroot" "ext4" "" "")"
+  [ "$result" = "cryptdevice=UUID=luks-uuid-5678:cryptroot root=/dev/mapper/cryptroot" ]
 }
 
-@test "write_limine_defaults writes build_limine_defaults_content output to the given path" {
+@test "resolve_root_cmdline_params LVM-on-LUKS resolves root= to the real root LV's UUID, not the raw LUKS mapper" {
+  crypttab=$'cryptlvm UUID=luks-uuid-9999 none luks'
+  result="$(resolve_root_cmdline_params "true" "sd-encrypt" "root-uuid" "$crypttab" "/dev/mapper/vgxero-root" "ext4" "" "  vgxero  " "lv-root-uuid-abcd")"
+  [ "$result" = "rd.luks.name=luks-uuid-9999=cryptlvm root=UUID=lv-root-uuid-abcd" ]
+}
+
+@test "resolve_root_cmdline_params multi-crypttab picks the entry matching the live root mapper, not the first (e.g. swap) line" {
+  crypttab=$'cryptswap UUID=swap-uuid-1111 /dev/urandom swap\ncryptroot UUID=luks-uuid-5678 none luks'
+  result="$(resolve_root_cmdline_params "true" "encrypt" "root-uuid" "$crypttab" "/dev/mapper/cryptroot" "ext4" "" "")"
+  [ "$result" = "cryptdevice=UUID=luks-uuid-5678:cryptroot root=/dev/mapper/cryptroot" ]
+}
+
+@test "resolve_root_cmdline_params multi-crypttab falls back to the first entry (without crashing) when nothing matches the live root mapper" {
+  crypttab=$'cryptswap UUID=swap-uuid-1111 /dev/urandom swap\ncryptroot UUID=luks-uuid-5678 none luks'
+  result="$(resolve_root_cmdline_params "true" "encrypt" "root-uuid" "$crypttab" "/dev/mapper/doesnotmatch" "ext4" "" "")"
+  [ "$result" = "cryptdevice=UUID=swap-uuid-1111:cryptswap root=/dev/mapper/cryptswap" ]
+}
+
+@test "resolve_root_cmdline_params LVM-on-LUKS + multi-crypttab (encrypted swap listed FIRST) selects the correct LVM-bearing entry via VG matching, not head -1" {
+  # Regression test for the combined-bug scenario: root_source is the LV
+  # (/dev/mapper/vgxero-root), which never direct-matches any crypttab
+  # mapper name. crypttab lists an unrelated encrypted swap entry first and
+  # the real LVM-bearing LUKS container second. Faking lvs (root LV's VG)
+  # and pvs (per-crypttab-entry PV check) proves selection is driven by VG
+  # membership, not by which line comes first in crypttab.
+  crypttab=$'cryptswap UUID=swap-uuid-1111 /dev/urandom swap\ncryptlvm UUID=luks-uuid-9999 none luks'
+  lvs() { echo "  vgxero  "; }
+  pvs() {
+    case "$*" in
+      *cryptlvm*) echo "  vgxero  " ;;
+      *) echo "" ;;
+    esac
+  }
+  blkid() { echo "lv-root-uuid-abcd"; }
+  result="$(resolve_root_cmdline_params "true" "sd-encrypt" "root-uuid" "$crypttab" "/dev/mapper/vgxero-root" "ext4" "")"
+  [ "$result" = "rd.luks.name=luks-uuid-9999=cryptlvm root=UUID=lv-root-uuid-abcd" ]
+}
+
+@test "resolve_root_cmdline_params appends rootflags=subvol= for a btrfs root (non-LUKS)" {
+  result="$(resolve_root_cmdline_params "false" "none" "root-uuid-1234" "" "" "btrfs" "rw,noatime,compress=zstd,ssd,space_cache=v2,subvolid=256,subvol=/@")"
+  [ "$result" = "root=UUID=root-uuid-1234 rootflags=subvol=@" ]
+}
+
+@test "resolve_root_cmdline_params does not append rootflags for a non-btrfs (xfs, XeroLinux's default) root" {
+  result="$(resolve_root_cmdline_params "false" "none" "root-uuid-1234" "" "" "xfs" "rw,relatime,attr2,inode64")"
+  [ "$result" = "root=UUID=root-uuid-1234" ]
+}
+
+@test "resolve_root_cmdline_params appends rootflags=subvol= for a btrfs root behind plain LUKS too" {
+  crypttab=$'cryptroot UUID=luks-uuid-5678 none luks'
+  result="$(resolve_root_cmdline_params "true" "encrypt" "root-uuid" "$crypttab" "/dev/mapper/cryptroot" "btrfs" "subvol=/@,compress=zstd" "")"
+  [ "$result" = "cryptdevice=UUID=luks-uuid-5678:cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@" ]
+}
+
+@test "resolve_root_cmdline_params omits rootflags=subvol= entirely when the root IS the top-level btrfs subvolume (subvol=/)" {
+  result="$(resolve_root_cmdline_params "false" "none" "root-uuid-1234" "" "" "btrfs" "rw,relatime,subvol=/")"
+  [ "$result" = "root=UUID=root-uuid-1234" ]
+  [[ "$result" != *"rootflags"* ]]
+}
+
+@test "resolve_root_cmdline_params does not abort under set -e -o pipefail when the real pvs/blkid defaults are exercised (plain LUKS, pvs unavailable/non-PV)" {
+  # Real production entrypoint (xsb-helper) runs under set -euo pipefail.
+  # pvs legitimately exits non-zero for a non-PV device (the common plain
+  # LUKS case), and blkid can too. Since params 8/9 are left unset here,
+  # this exercises the REAL pvs/blkid command-substitution defaults, not
+  # injected fakes - proving the split-assignment set -e trap doesn't
+  # silently kill cmd_migrate for the common case.
+  run bash -c "
+    set -euo pipefail
+    source '${BATS_TEST_DIRNAME}/../../lib/jsonevent.sh'
+    source '${BATS_TEST_DIRNAME}/../../lib/chainload.sh'
+    source '${BATS_TEST_DIRNAME}/../../lib/migrate.sh'
+    result=\"\$(resolve_root_cmdline_params 'true' 'encrypt' 'root-uuid' \$'cryptroot UUID=luks-uuid-5678 none luks' '/dev/mapper/cryptroot' 'ext4' '')\"
+    echo \"ok:[\$result]\"
+  "
+  [ "$status" -eq 0 ]
+  [[ "$output" == "ok:[cryptdevice=UUID=luks-uuid-5678:cryptroot root=/dev/mapper/cryptroot]" ]]
+}
+
+@test "resolve_root_cmdline_params does not abort under set -e -o pipefail when a btrfs root's options contain no subvol= (top-level mount)" {
+  # Real production entrypoint (xsb-helper) runs under set -euo pipefail.
+  # grep -oE 'subvol=...' legitimately exits non-zero when root_options
+  # has no subvol= at all (a plausible top-level-btrfs-mount scenario).
+  # Proves the fixed subvol_opt line's "no match" case is a handled empty
+  # string, not an accidental abort of the whole function.
+  #
+  # `shopt -s inherit_errexit` is added on top of the prior round's
+  # set -e regression test style deliberately: bash's inherit_errexit is
+  # OFF by default, and resolve_root_cmdline_params is always invoked via
+  # a `$(...)` command substitution in real call sites (see cmd_migrate) -
+  # meaning that WITHOUT inherit_errexit, an internal split-assignment
+  # abort is silently swallowed by the command-substitution boundary and
+  # this test would pass even against the unfixed, buggy code (verified
+  # by hand: it does). Enabling inherit_errexit makes -e propagate into
+  # the substitution the way a defensively-written production script
+  # should, so this test genuinely fails against the bug and genuinely
+  # passes against the fix.
+  run bash -c "
+    set -euo pipefail
+    shopt -s inherit_errexit
+    source '${BATS_TEST_DIRNAME}/../../lib/jsonevent.sh'
+    source '${BATS_TEST_DIRNAME}/../../lib/chainload.sh'
+    source '${BATS_TEST_DIRNAME}/../../lib/migrate.sh'
+    result=\"\$(resolve_root_cmdline_params 'false' 'none' 'root-uuid-1234' '' '' 'btrfs' 'rw,relatime')\"
+    echo \"ok:[\$result]\"
+  "
+  [ "$status" -eq 0 ]
+  [[ "$output" == "ok:[root=UUID=root-uuid-1234]" ]]
+}
+
+@test "resolve_grub_extra_params extracts GRUB_CMDLINE_LINUX_DEFAULT value, ignoring unrelated lines" {
+  grub_content=$'GRUB_DEFAULT=0\nGRUB_TIMEOUT=5\nGRUB_CMDLINE_LINUX_DEFAULT="quiet nowatchdog loglevel=3 modprobe.blacklist=nouveau"\nGRUB_CMDLINE_LINUX=""'
+  result="$(resolve_grub_extra_params "$grub_content")"
+  [ "$result" = "quiet nowatchdog loglevel=3 modprobe.blacklist=nouveau" ]
+}
+
+@test "resolve_grub_extra_params handles a single-quoted GRUB_CMDLINE_LINUX_DEFAULT value" {
+  grub_content="GRUB_CMDLINE_LINUX_DEFAULT='quiet mitigations=off'"
+  result="$(resolve_grub_extra_params "$grub_content")"
+  [ "$result" = "quiet mitigations=off" ]
+}
+
+@test "resolve_grub_extra_params falls back to the stock string when GRUB_CMDLINE_LINUX_DEFAULT is absent" {
+  grub_content=$'GRUB_DEFAULT=0\nGRUB_TIMEOUT=5'
+  result="$(resolve_grub_extra_params "$grub_content")"
+  [ "$result" = "quiet nowatchdog loglevel=3" ]
+}
+
+@test "resolve_grub_extra_params falls back to the stock string when GRUB_CMDLINE_LINUX_DEFAULT is present but empty" {
+  grub_content='GRUB_CMDLINE_LINUX_DEFAULT=""'
+  result="$(resolve_grub_extra_params "$grub_content")"
+  [ "$result" = "quiet nowatchdog loglevel=3" ]
+}
+
+@test "resolve_grub_extra_params uses the last GRUB_CMDLINE_LINUX_DEFAULT line when multiple are present" {
+  grub_content=$'GRUB_CMDLINE_LINUX_DEFAULT="first value"\nGRUB_CMDLINE_LINUX_DEFAULT="second value"'
+  result="$(resolve_grub_extra_params "$grub_content")"
+  [ "$result" = "second value" ]
+}
+
+@test "build_limine_defaults_content includes the resolved grub extra params and root cmdline params" {
+  result="$(build_limine_defaults_content "root=UUID=root-uuid-1234" "quiet loglevel=3 modprobe.blacklist=nouveau")"
+  [[ "$result" == *"KERNEL_CMDLINE[default]="* ]]
+  [[ "$result" == *"quiet loglevel=3 modprobe.blacklist=nouveau"* ]]
+  [[ "$result" == *"root=UUID=root-uuid-1234"* ]]
+  [[ "$result" != *"nowatchdog"* ]]
+}
+
+@test "write_limine_defaults writes build_limine_defaults_content output including custom grub extra params to the given path" {
+  target="$BATS_TEST_TMPDIR/limine-defaults"
+  write_limine_defaults "$target" "root=UUID=root-uuid-1234" "quiet loglevel=3 modprobe.blacklist=nouveau"
+  grep -q "root=UUID=root-uuid-1234" "$target"
+  grep -q "modprobe.blacklist=nouveau" "$target"
+  grep -q "KERNEL_CMDLINE\[default\]=" "$target"
+}
+
+@test "write_limine_defaults falls back to the stock grub extra params when the third argument is omitted" {
   target="$BATS_TEST_TMPDIR/limine-defaults"
   write_limine_defaults "$target" "root=UUID=root-uuid-1234"
+  grep -q "quiet nowatchdog loglevel=3" "$target"
   grep -q "root=UUID=root-uuid-1234" "$target"
-  grep -q "KERNEL_CMDLINE\[default\]=" "$target"
 }
 
 @test "write_limine_defaults previews without writing when DRY_RUN=1" {
@@ -341,6 +497,7 @@ stub_cmd_migrate_happy_path() {
   detect_luks_root() { return 1; }
   detect_mkinitcpio_hook_family() { echo "none"; }
   findmnt() { echo "root-uuid-1234"; }
+  resolve_grub_extra_params() { echo "quiet nowatchdog loglevel=3"; }
   write_limine_conf() { :; }
   install_limine_packages() { emit_event "would_run" "info" "install limine"; }
   write_limine_defaults() { emit_event "would_run" "info" "write limine defaults"; }
@@ -361,6 +518,21 @@ stub_cmd_migrate_happy_path() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"pacman -Rns grub"* ]]
   [[ "$output" == *"migrate_done"* ]]
+}
+
+@test "cmd_migrate passes the user's real GRUB_CMDLINE_LINUX_DEFAULT customizations through to the final /etc/default/limine content" {
+  stub_cmd_migrate_happy_path
+  resolve_grub_extra_params() { echo "quiet loglevel=3 modprobe.blacklist=nouveau"; }
+  captured_file="$BATS_TEST_TMPDIR/captured_limine_defaults_content"
+  write_limine_defaults() {
+    build_limine_defaults_content "$2" "$3" > "$captured_file"
+  }
+  DRY_RUN=1
+  run cmd_migrate
+  [ "$status" -eq 0 ]
+  grep -q "modprobe.blacklist=nouveau" "$captured_file"
+  grep -q "root=UUID=root-uuid-1234" "$captured_file"
+  ! grep -q "quiet nowatchdog loglevel=3" "$captured_file"
 }
 
 @test "cmd_migrate deploys the fallback path when no other OS is detected" {

@@ -1,5 +1,7 @@
 import os
+from unittest.mock import patch
 
+from PyQt6.QtCore import QProcess
 from PyQt6.QtWidgets import QWizard
 
 from xsb_gui.pages.confirm_page import SECUREBOOT_ERROR_PAGE_ID, SECUREBOOT_PAGE_ID
@@ -14,6 +16,8 @@ SECUREBOOT_OK = os.path.join(FIXTURE_DIR, "fake_helper_secureboot_ok.sh")
 SECUREBOOT_ALREADY_ACTIVE = os.path.join(FIXTURE_DIR, "fake_helper_secureboot_already_active.sh")
 SECUREBOOT_ERROR = os.path.join(FIXTURE_DIR, "fake_helper_secureboot_error.sh")
 RAW_OUTPUT_FIXTURE = os.path.join(FIXTURE_DIR, "fake_helper_raw_output.sh")
+SLOW_FIXTURE = os.path.join(FIXTURE_DIR, "fake_helper_slow.sh")
+MALFORMED_EVENT_FIXTURE = os.path.join(FIXTURE_DIR, "fake_helper_malformed_event.sh")
 
 
 def test_migrate_page_completes_on_migrate_done(qtbot):
@@ -168,3 +172,119 @@ def test_migrate_page_shows_raw_output_when_non_json_line_received(qtbot):
         pass
 
     assert "[RAW] pkexec: /usr/lib/xsb-gui/xsb-helper: No such file or directory" in page.log.toPlainText()
+
+
+# --- Bug 1: re-entering / leaving a page mid-run must stop the previous runner ---
+
+
+def test_reentering_page_stops_previous_runner_before_starting_new_one(qtbot):
+    page = MigratePage(helper_path=OK, use_pkexec=False)
+    qtbot.addWidget(page)
+    page.initializePage()
+
+    with qtbot.waitSignal(page.runner.finished, timeout=2000):
+        pass
+
+    old_runner = page.runner
+    with patch.object(old_runner, "stop") as mock_stop:
+        page.initializePage()
+
+    mock_stop.assert_called_once()
+
+
+def test_cleanup_page_stops_active_runner(qtbot):
+    page = MigratePage(helper_path=OK, use_pkexec=False)
+    qtbot.addWidget(page)
+    page.initializePage()
+    runner = page.runner
+
+    with patch.object(runner, "stop") as mock_stop:
+        page.cleanupPage()
+
+    mock_stop.assert_called_once()
+
+
+def test_back_then_next_kills_previous_real_process_not_just_mock(qtbot):
+    # Proves an actual QProcess started by a prior page entry is terminated,
+    # not merely that a mocked method was called. Simulates: user is on the
+    # page mid-run (slow fixture still sleeping), clicks Back (cleanupPage),
+    # then Next again (initializePage) re-entering the same page instance.
+    page = MigratePage(helper_path=SLOW_FIXTURE, use_pkexec=False)
+    qtbot.addWidget(page)
+    page.initializePage()
+    old_runner = page.runner
+
+    qtbot.waitUntil(
+        lambda: old_runner._process.state() == QProcess.ProcessState.Running, timeout=2000
+    )
+
+    # Back
+    page.cleanupPage()
+    qtbot.waitUntil(
+        lambda: old_runner._process.state() == QProcess.ProcessState.NotRunning, timeout=3000
+    )
+    assert old_runner._process.state() == QProcess.ProcessState.NotRunning
+
+    # Next (re-enter same page)
+    page.initializePage()
+    new_runner = page.runner
+    assert new_runner is not old_runner
+    # Only one process should now be running for this page.
+    qtbot.waitUntil(
+        lambda: new_runner._process.state() == QProcess.ProcessState.Running, timeout=2000
+    )
+    assert old_runner._process.state() == QProcess.ProcessState.NotRunning
+
+
+def test_reentering_page_without_prior_run_does_not_crash(qtbot):
+    page = MigratePage(helper_path=OK, use_pkexec=False)
+    qtbot.addWidget(page)
+    # No prior initializePage() call: self.runner is None. Must not raise.
+    page.cleanupPage()
+    page.initializePage()
+    with qtbot.waitSignal(page.runner.finished, timeout=2000):
+        pass
+    assert page.isComplete() is True
+
+
+# --- Bug 3: malformed/missing-key events must not crash the handler ---
+
+
+def test_migrate_page_on_event_handles_missing_event_key_without_crashing(qtbot):
+    page = MigratePage(helper_path=OK, use_pkexec=False)
+    qtbot.addWidget(page)
+    page._on_event({"foo": "bar"})
+    assert page.isComplete() is False
+    assert "[INFO]" in page.log.toPlainText()
+
+
+def test_secureboot_page_on_event_handles_missing_event_key_without_crashing(qtbot):
+    page = SecureBootPage(helper_path=SECUREBOOT_OK, use_pkexec=False)
+    qtbot.addWidget(page)
+    page.wizard = lambda: FakeWizard()
+    page._on_event({"foo": "bar"})
+    assert page._had_error is False
+    assert page.isComplete() is False
+
+
+def test_secureboot_page_on_event_handles_error_event_missing_message_key(qtbot):
+    page = SecureBootPage(helper_path=SECUREBOOT_OK, use_pkexec=False)
+    qtbot.addWidget(page)
+    fake_wizard = FakeWizard()
+    page.wizard = lambda: fake_wizard
+    page._on_event({"event": "error"})
+    assert page._had_error is True
+    assert page._error_message == ""
+    assert fake_wizard.next_called is True
+
+
+def test_migrate_page_survives_malformed_event_line_from_real_process(qtbot):
+    page = MigratePage(helper_path=MALFORMED_EVENT_FIXTURE, use_pkexec=False)
+    qtbot.addWidget(page)
+    page.initializePage()
+
+    with qtbot.waitSignal(page.runner.finished, timeout=2000):
+        pass
+
+    assert page.isComplete() is True
+    assert "Migration to Limine complete." in page.log.toPlainText()

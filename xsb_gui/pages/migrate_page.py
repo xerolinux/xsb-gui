@@ -30,6 +30,7 @@ class _RunnerPage(QWizardPage):
         self.runner = None
 
     def initializePage(self):
+        self._stop_runner()
         self._complete = False
         self.retry_button.setVisible(False)
         self.log.clear()
@@ -40,12 +41,39 @@ class _RunnerPage(QWizardPage):
         self.runner.raw_output_received.connect(self._on_raw_output)
         self.runner.start(self._subcommand)
 
+    def cleanupPage(self):
+        # Called by QWizard when navigating away from this page (e.g. Back).
+        # Stop any in-flight privileged helper run so it can't keep mutating
+        # the system concurrently with a later re-entry into this page.
+        self._stop_runner()
+
+    def _stop_runner(self):
+        """Stop the current runner (if any) and detach it from this page.
+
+        Disconnects the old runner's signals first so a delayed
+        finished/error/event emission from the process being torn down
+        can't be mistaken for state from a freshly started run.
+        """
+        if self.runner is None:
+            return
+        for signal, slot in (
+            (self.runner.event_received, self._on_event),
+            (self.runner.finished, self._on_finished),
+            (self.runner.error_occurred, self._on_process_error),
+            (self.runner.raw_output_received, self._on_raw_output),
+        ):
+            try:
+                signal.disconnect(slot)
+            except TypeError:
+                pass
+        self.runner.stop()
+
     def retry(self):
         self.initializePage()
 
     def _on_event(self, event):
         self.log.appendPlainText(format_event_line(event))
-        if event["event"] == self._done_event:
+        if event.get("event", "") == self._done_event:
             self._complete = True
             self.completeChanged.emit()
 

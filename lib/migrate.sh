@@ -35,33 +35,174 @@ build_limine_conf() {
 
 resolve_root_cmdline_params() {
     local luks="$1" mkinitcpio_hook="$2" root_uuid="$3" crypttab_content="${4-$(cat /etc/crypttab 2>/dev/null)}"
+    # root_source/root_fstype/root_options describe the CURRENTLY MOUNTED
+    # root filesystem. This tool only ever runs on a live, already-booted
+    # system, so findmnt's live view of / is a reliable ground truth for
+    # both the LVM-on-LUKS and btrfs-subvolume detection below - regardless
+    # of naming conventions or fstab formatting quirks.
+    local root_source="${5-$(findmnt -no SOURCE / 2>/dev/null)}"
+    local root_fstype="${6-$(findmnt -no FSTYPE / 2>/dev/null)}"
+    local root_options="${7-$(findmnt -no OPTIONS / 2>/dev/null)}"
+
+    # Bug 3: btrfs subvolume root. grub-mkconfig would read /etc/fstab and
+    # emit rootflags=subvol=<name>; this tool never read fstab, so mkinitcpio
+    # couldn't find the correct subvolume to mount as root. findmnt -no
+    # OPTIONS / is used instead of parsing /etc/fstab directly since it
+    # reflects the live mount reality. Applies independent of LUKS (both
+    # branches below fall through to this).
+    # ASSUMPTION: the kernel/findmnt report subvol= with a leading "/"
+    # (subvolume path from the top of the btrfs tree, e.g. "subvol=/@"),
+    # while /etc/fstab conventionally omits it (e.g. "subvol=@"). Both forms
+    # are accepted identically by the kernel/mount, but the leading "/" is
+    # stripped here to match the form GRUB would have emitted from fstab.
+    local rootflags=""
+    if [[ "$root_fstype" == "btrfs" ]]; then
+        # Combined single-statement local+assignment (see the LVM-on-LUKS
+        # note below for why): grep legitimately exits non-zero when
+        # root_options has no subvol= at all (a plausible top-level-mount
+        # scenario), and a split `local subvol_opt` / `subvol_opt="$(...)"`
+        # would not reliably mask that under set -e in every calling
+        # context. The trailing `|| true` makes "no subvol= match" an
+        # intentional, handled empty-string result instead.
+        local subvol_opt="$(grep -oE 'subvol=[^,]+' <<< "$root_options" | head -1 || true)"
+        if [[ -n "$subvol_opt" ]]; then
+            # A bare "subvol=/" (the actual top-level subvolume, no named
+            # subvolume) strips down to an empty string here - that's the
+            # default mount and needs no rootflags= at all, so only append
+            # when a real (named) subvolume remains after stripping.
+            local subvol_name="${subvol_opt#subvol=/}"
+            [[ -n "$subvol_name" ]] && rootflags=" rootflags=subvol=${subvol_name}"
+        fi
+    fi
+
     if [[ "$luks" != "true" ]]; then
-        printf 'root=UUID=%s' "$root_uuid"
+        printf 'root=UUID=%s%s' "$root_uuid" "$rootflags"
         return
     fi
-    local crypt_line mapper_name luks_uuid
-    crypt_line="$(grep -vE '^[[:space:]]*(#|$)' <<< "$crypttab_content" | head -1)"
-    mapper_name="$(awk '{print $1}' <<< "$crypt_line")"
-    luks_uuid="$(awk '{print $2}' <<< "$crypt_line" | sed -E 's#^(UUID=|/dev/disk/by-uuid/)##')"
-    if [[ "$mkinitcpio_hook" == "sd-encrypt" ]]; then
-        printf 'rd.luks.name=%s=%s root=/dev/mapper/%s' "$luks_uuid" "$mapper_name" "$mapper_name"
+
+    # Bug 2: multiple crypttab entries (e.g. encrypted swap listed above the
+    # encrypted root). Prefer the entry whose mapper name matches the
+    # currently-mounted root device (root_source) over blindly taking the
+    # first non-comment line.
+    local root_mapper_name=""
+    [[ -n "$root_source" ]] && root_mapper_name="$(basename "$root_source")"
+
+    # Bug 2 (crypttab entry selection): a direct mapper-name match handles
+    # plain (non-LVM) LUKS root correctly. It deliberately does NOT handle
+    # LVM-on-LUKS (see Bug 1 below): root_mapper_name there is the LV's
+    # basename (e.g. "vgname-root"), which never matches a crypttab entry
+    # naming the raw LUKS container, so this always falls through.
+    local crypt_line=""
+    if [[ -n "$root_mapper_name" ]]; then
+        crypt_line="$(grep -vE '^[[:space:]]*(#|$)' <<< "$crypttab_content" \
+            | awk -v m="$root_mapper_name" '$1 == m' | head -1)"
+    fi
+
+    if [[ -z "$crypt_line" ]]; then
+        # No direct mapper-name match: this is the LVM-on-LUKS signature.
+        # Rather than blindly falling back to head -1 (which, with multiple
+        # crypttab entries - e.g. an encrypted swap partition listed before
+        # the LVM-bearing LUKS container - can select a completely unrelated
+        # entry), determine the live root LV's volume group and select the
+        # crypttab entry whose LUKS mapper is itself a PV in that SAME VG.
+        # root_lv_vg's default is combined into a single `local x="$(cmd)"`
+        # statement for the same set -e safety reason documented below for
+        # pvs_output/lv_uuid: lvs legitimately exits non-zero when
+        # root_source isn't an LV (the common plain-LUKS/no-LVM case).
+        local root_lv_vg="${10-$(lvs --noheadings -o vg_name "$root_source" 2>/dev/null | tr -d '[:space:]')}"
+        if [[ -n "$root_lv_vg" ]]; then
+            local candidate_line
+            while IFS= read -r candidate_line; do
+                [[ -z "$candidate_line" ]] && continue
+                local candidate_mapper="$(awk '{print $1}' <<< "$candidate_line")"
+                local candidate_vg="$(pvs --noheadings -o vg_name "/dev/mapper/${candidate_mapper}" 2>/dev/null | tr -d '[:space:]')"
+                if [[ -n "$candidate_vg" && "$candidate_vg" == "$root_lv_vg" ]]; then
+                    crypt_line="$candidate_line"
+                    break
+                fi
+            done < <(grep -vE '^[[:space:]]*(#|$)' <<< "$crypttab_content")
+        fi
+    fi
+
+    if [[ -z "$crypt_line" ]]; then
+        # Final fallback: nothing matched by either the direct mapper-name
+        # method or the VG-matching method above - a genuinely
+        # ambiguous/unusual setup. Same spirit as before, now a true last
+        # resort rather than the primary path for the LVM-on-LUKS case.
+        crypt_line="$(grep -vE '^[[:space:]]*(#|$)' <<< "$crypttab_content" | head -1)"
+    fi
+
+    local mapper_name="$(awk '{print $1}' <<< "$crypt_line")"
+    local luks_uuid="$(awk '{print $2}' <<< "$crypt_line" | sed -E 's#^(UUID=|/dev/disk/by-uuid/)##')"
+
+    # Bug 1: LVM-on-LUKS. Calamares's "erase disk and encrypt" flow creates
+    # LUKS -> LVM PV -> VG -> LVs, one of which is the actual root
+    # filesystem - NOT the raw LUKS mapper device directly. Detect this by
+    # checking whether the opened LUKS mapper is itself an LVM PV; if so,
+    # resolve root= to the real root LV's UUID (via the live root_source,
+    # which - since this only runs on an already-booted system - already IS
+    # that LV's device path) instead of the raw LUKS mapper.
+    # NOTE: these two defaults are deliberately written as single combined
+    # `local x="${N-$(cmd)}"` statements (matching crypttab_content above),
+    # not split across a `local x` declaration and a separate assignment.
+    # Under this project's `set -euo pipefail` entrypoint, a split
+    # assignment's exit status is that of the failing command substitution
+    # itself and WOULD abort the whole script (e.g. pvs legitimately exits
+    # non-zero for a non-PV device - the common plain-LUKS case); combined
+    # with `local`, the exit status is `local`'s own (successful), masking
+    # the inner command's failure so a non-PV/non-existent device is safely
+    # treated as "empty output" instead of crashing cmd_migrate.
+    local pvs_output="${8-$(pvs --noheadings -o vg_name "/dev/mapper/${mapper_name}" 2>/dev/null | head -1)}"
+
+    local root_dev_part
+    if [[ -n "$pvs_output" ]]; then
+        local lv_uuid="${9-$(blkid -s UUID -o value "$root_source" 2>/dev/null)}"
+        root_dev_part="root=UUID=${lv_uuid}"
     else
-        printf 'cryptdevice=UUID=%s:%s root=/dev/mapper/%s' "$luks_uuid" "$mapper_name" "$mapper_name"
+        # Not an LVM PV: plain LUKS-encrypted root. Preserve exact prior
+        # behavior unchanged (this is the common case).
+        root_dev_part="root=/dev/mapper/${mapper_name}"
+    fi
+
+    if [[ "$mkinitcpio_hook" == "sd-encrypt" ]]; then
+        printf 'rd.luks.name=%s=%s %s%s' "$luks_uuid" "$mapper_name" "$root_dev_part" "$rootflags"
+    else
+        printf 'cryptdevice=UUID=%s:%s %s%s' "$luks_uuid" "$mapper_name" "$root_dev_part" "$rootflags"
+    fi
+}
+
+resolve_grub_extra_params() {
+    local grub_defaults_content="${1-$(cat /etc/default/grub 2>/dev/null)}"
+    local line value
+    line="$(grep -E '^GRUB_CMDLINE_LINUX_DEFAULT=' <<< "$grub_defaults_content" | tail -1)"
+    if [[ -z "$line" ]]; then
+        printf 'quiet nowatchdog loglevel=3'
+        return
+    fi
+    value="${line#GRUB_CMDLINE_LINUX_DEFAULT=}"
+    value="${value%\"}"
+    value="${value#\"}"
+    value="${value%\'}"
+    value="${value#\'}"
+    if [[ -z "$value" ]]; then
+        printf 'quiet nowatchdog loglevel=3'
+    else
+        printf '%s' "$value"
     fi
 }
 
 build_limine_defaults_content() {
-    local root_cmdline_params="$1"
-    printf 'KERNEL_CMDLINE[default]="quiet nowatchdog loglevel=3 %s"\n' "$root_cmdline_params"
+    local root_cmdline_params="$1" grub_extra_params="$2"
+    printf 'KERNEL_CMDLINE[default]="%s %s"\n' "$grub_extra_params" "$root_cmdline_params"
 }
 
 write_limine_defaults() {
-    local path="${1-/etc/default/limine}" root_cmdline_params="$2"
+    local path="${1-/etc/default/limine}" root_cmdline_params="$2" grub_extra_params="${3-quiet nowatchdog loglevel=3}"
     if [[ "${DRY_RUN:-0}" == "1" ]]; then
         emit_event "would_run" "info" "write $path"
         return 0
     fi
-    build_limine_defaults_content "$root_cmdline_params" > "$path"
+    build_limine_defaults_content "$root_cmdline_params" "$grub_extra_params" > "$path"
 }
 
 install_limine_packages() {
@@ -193,11 +334,18 @@ cmd_migrate() {
     emit_event "migrate_step" "info" "Configuring /etc/default/limine"
     local luks="false"
     detect_luks_root && luks="true"
-    local mkinitcpio_hook root_uuid root_cmdline_params
+    local mkinitcpio_hook root_uuid root_source root_fstype root_options crypttab_content
+    local root_cmdline_params grub_extra_params
     mkinitcpio_hook="$(detect_mkinitcpio_hook_family)"
     root_uuid="$(findmnt -no UUID / 2>/dev/null)" || true
-    root_cmdline_params="$(resolve_root_cmdline_params "$luks" "$mkinitcpio_hook" "$root_uuid")"
-    write_limine_defaults "/etc/default/limine" "$root_cmdline_params" || {
+    root_source="$(findmnt -no SOURCE / 2>/dev/null)" || true
+    root_fstype="$(findmnt -no FSTYPE / 2>/dev/null)" || true
+    root_options="$(findmnt -no OPTIONS / 2>/dev/null)" || true
+    crypttab_content="$(cat /etc/crypttab 2>/dev/null)" || true
+    root_cmdline_params="$(resolve_root_cmdline_params "$luks" "$mkinitcpio_hook" "$root_uuid" \
+        "$crypttab_content" "$root_source" "$root_fstype" "$root_options")"
+    grub_extra_params="$(resolve_grub_extra_params)"
+    write_limine_defaults "/etc/default/limine" "$root_cmdline_params" "$grub_extra_params" || {
         emit_event "error" "error" "Failed to write /etc/default/limine. GRUB has NOT been touched."
         return 1
     }

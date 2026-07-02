@@ -1,9 +1,13 @@
 import os
+
+from PyQt6.QtCore import QProcess
+
 from xsb_gui.helper_runner import HelperRunner
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "fake_helper.sh")
 RAW_OUTPUT_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "fake_helper_raw_output.sh")
 STDERR_OUTPUT_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "fake_helper_stderr_output.sh")
+SLOW_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "fake_helper_slow.sh")
 
 
 def test_helper_runner_emits_parsed_events_and_finishes(qtbot):
@@ -62,3 +66,26 @@ def test_helper_runner_captures_stderr_output_via_raw_output_received(qtbot):
 
     assert blocker.args == [1]
     assert raw_lines == ["some diagnostic text"]
+
+
+def test_helper_runner_stop_is_a_noop_when_not_running():
+    runner = HelperRunner(helper_path=FIXTURE, use_pkexec=False)
+    # Never started: state is NotRunning. Should not raise.
+    runner.stop()
+    assert runner._process.state() == QProcess.ProcessState.NotRunning
+
+
+def test_helper_runner_stop_terminates_a_running_process(qtbot):
+    runner = HelperRunner(helper_path=SLOW_FIXTURE, use_pkexec=False)
+    runner.start("migrate")
+
+    qtbot.waitUntil(
+        lambda: runner._process.state() == QProcess.ProcessState.Running, timeout=2000
+    )
+
+    runner.stop()
+
+    qtbot.waitUntil(
+        lambda: runner._process.state() == QProcess.ProcessState.NotRunning, timeout=3000
+    )
+    assert runner._process.state() == QProcess.ProcessState.NotRunning

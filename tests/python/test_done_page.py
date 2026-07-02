@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from xsb_gui.pages.done_page import DONE_ALREADY_ACTIVE_TEXT, DONE_TEXT, DonePage
 
@@ -11,9 +11,13 @@ class FakeSecureBootPage:
 class FakeWizard:
     def __init__(self, secureboot_page):
         self._secureboot_page = secureboot_page
+        self.buttons = {}
 
     def page(self, _page_id):
         return self._secureboot_page
+
+    def button(self, wizard_button):
+        return self.buttons.setdefault(wizard_button, MagicMock())
 
 
 def test_constructor_stores_helper_path_and_use_pkexec(qtbot):
@@ -116,6 +120,31 @@ def test_reboot_button_reboots_even_on_nonzero_exit_code(qtbot):
         mock_qprocess_cls.startDetached.assert_called_once_with(
             "systemctl", ["reboot", "--firmware-setup"]
         )
+
+
+def test_next_id_returns_no_page_terminal_value(qtbot):
+    page = DonePage()
+    qtbot.addWidget(page)
+    assert page.nextId() == -1
+
+
+def test_initialize_page_hides_standard_wizard_navigation_buttons(qtbot):
+    from PyQt6.QtWidgets import QWizard
+
+    page = DonePage()
+    qtbot.addWidget(page)
+    fake_wizard = FakeWizard(FakeSecureBootPage(needs_reboot=True))
+    page.wizard = lambda: fake_wizard
+
+    page.initializePage()
+
+    for wizard_button in (
+        QWizard.WizardButton.BackButton,
+        QWizard.WizardButton.NextButton,
+        QWizard.WizardButton.FinishButton,
+        QWizard.WizardButton.CancelButton,
+    ):
+        fake_wizard.buttons[wizard_button].setVisible.assert_called_once_with(False)
 
 
 def test_reboot_button_reboots_even_when_helper_fails_to_start(qtbot):

@@ -1,5 +1,5 @@
-from PyQt6.QtCore import QProcess
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget, QWizardPage
+from PyQt6.QtCore import QProcess, Qt
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget, QWizard, QWizardPage
 
 from xsb_gui.helper_runner import HelperRunner
 from xsb_gui.pages.confirm_page import SECUREBOOT_PAGE_ID
@@ -50,7 +50,7 @@ class DonePage(QWizardPage):
         self.later_button = QPushButton("Later")
         button_layout.addWidget(self.reboot_button)
         button_layout.addWidget(self.later_button)
-        layout.addWidget(self.button_row)
+        layout.addWidget(self.button_row, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.reboot_button.clicked.connect(self._on_reboot_clicked)
         self.later_button.clicked.connect(self._on_later_clicked)
@@ -70,6 +70,19 @@ class DonePage(QWizardPage):
         self.reboot_button.setEnabled(True)
         self.later_button.setEnabled(True)
         self.reboot_button.setText("Reboot to BIOS")
+        wizard = self.wizard()
+        for wizard_button in (
+            QWizard.WizardButton.BackButton,
+            QWizard.WizardButton.NextButton,
+            QWizard.WizardButton.FinishButton,
+            QWizard.WizardButton.CancelButton,
+        ):
+            button = wizard.button(wizard_button)
+            if button is not None:
+                button.setVisible(False)
+
+    def nextId(self):
+        return -1
 
     def _on_later_clicked(self):
         self.button_row.setVisible(False)

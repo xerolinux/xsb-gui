@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+push.sh
+.pytest_cache/
+*.pkg.tar.zst
+pkg/
+src/

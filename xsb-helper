@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -euo pipefail
+
+HELPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$HELPER_DIR/lib"
+[[ -d "$LIB_DIR" ]] || LIB_DIR="/usr/lib/xsb-gui/lib"
+
+# shellcheck source=lib/jsonevent.sh
+source "$LIB_DIR/jsonevent.sh"
+source "$LIB_DIR/preflight.sh"
+source "$LIB_DIR/chainload.sh"
+source "$LIB_DIR/migrate.sh"
+source "$LIB_DIR/secureboot.sh"
+
+DRY_RUN=0
+subcommand="${1-}"
+shift || true
+for arg in "$@"; do
+    [[ "$arg" == "--dry-run" ]] && DRY_RUN=1
+done
+export DRY_RUN
+
+case "$subcommand" in
+    preflight) cmd_preflight ;;
+    migrate) cmd_migrate ;;
+    enable-secureboot) cmd_enable_secureboot ;;
+    status) cmd_status ;;
+    *)
+        emit_event "error" "error" "Unknown subcommand: $subcommand"
+        exit 1
+        ;;
+esac

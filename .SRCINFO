@@ -1,0 +1,16 @@
+pkgbase = xsb-gui
+	pkgdesc = XeroLinux Limine/SecureBoot Enabler
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/xerolinux/xsb-gui
+	install = xsb-gui.install
+	arch = x86_64
+	license = GPL-3.0-or-later
+	depends = python-pyqt6
+	depends = polkit
+	depends = limine
+	depends = limine-mkinitcpio-hook
+	depends = sbctl
+	depends = efibootmgr
+
+pkgname = xsb-gui

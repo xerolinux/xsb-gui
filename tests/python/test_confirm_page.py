@@ -1,0 +1,31 @@
+from xsb_gui.pages.confirm_page import ConfirmPage
+from xsb_gui.parsing import PreflightResult
+
+
+class FakePreflightPage:
+    def __init__(self, result):
+        self.result = result
+
+
+class FakeWizard:
+    def __init__(self, preflight_page):
+        self._preflight_page = preflight_page
+
+    def page(self, _page_id):
+        return self._preflight_page
+
+
+def test_confirm_page_shows_summary_from_preflight_result(qtbot):
+    result = PreflightResult(
+        uefi=True, gpt=True, esp_mountpoint="/boot/efi", bootloader="grub",
+        luks=False, mkinitcpio_hook="none", other_os=["Windows Boot Manager"],
+        secureboot_state="disabled",
+    )
+    page = ConfirmPage()
+    qtbot.addWidget(page)
+    page.wizard = lambda: FakeWizard(FakePreflightPage(result))
+
+    page.initializePage()
+
+    assert "Windows Boot Manager" in page.summary_label.text()
+    assert page.isComplete() is True

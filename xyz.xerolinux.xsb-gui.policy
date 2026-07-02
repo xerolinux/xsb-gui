@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>XeroLinux</vendor>
+  <vendor_url>https://xerolinux.xyz</vendor_url>
+  <action id="xyz.xerolinux.xsb-gui.run-helper">
+    <description>Migrate bootloader to Limine and enable Secure Boot</description>
+    <message>Authentication is required to modify the bootloader and Secure Boot configuration</message>
+    <icon_name>xsb-gui</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/xsb-gui/xsb-helper</annotate>
+  </action>
+</policyconfig>

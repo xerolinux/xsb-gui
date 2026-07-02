@@ -21,8 +21,8 @@ recovery from a live USB. **Backups are strongly recommended.**
 - Migrates an installed XeroLinux system from **[GRUB](https://git.savannah.gnu.org/cgit/grub.git/)** to **[Limine](https://github.com/limine-bootloader/limine)**, in a single guided wizard
 - Detects other installed operating systems and preserves dual-boot via **[Limine](https://github.com/limine-bootloader/limine)** chainload entries
 - Detects UEFI, GPT, and LUKS root (including LVM-on-LUKS), carrying over your **[GRUB](https://git.savannah.gnu.org/cgit/grub.git/)** kernel parameters
+- Every step runs through a single root-privileged helper (`xsb-helper`) via `pkexec`, with visible live progress
 - Refuses to remove **[GRUB](https://git.savannah.gnu.org/cgit/grub.git/)** until **[Limine](https://github.com/limine-bootloader/limine)** is verified working, and refuses to migrate while Secure Boot is already on
-- Every step runs through a single root-privileged helper (`xsb-helper`) via `pkexec`, with live progress shown in the GUI
 - Enables Secure Boot via `sbctl`: creates, enrolls, and signs keys for **[Limine](https://github.com/limine-bootloader/limine)** and your kernels, with known board quirks handled
 
 ## Requirements

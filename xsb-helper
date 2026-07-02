@@ -24,7 +24,9 @@ export DRY_RUN
 case "$subcommand" in
     preflight) cmd_preflight ;;
     migrate) cmd_migrate ;;
+    apply-theme) cmd_apply_theme ;;
     enable-secureboot) cmd_enable_secureboot ;;
+    reset-keys) cmd_reset_secureboot_keys ;;
     status) cmd_status ;;
     *)
         emit_event "error" "error" "Unknown subcommand: $subcommand"

@@ -40,6 +40,19 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "sbctl_keys_exist_locally true when the keys directory exists" {
+  keys_dir="$BATS_TEST_TMPDIR/keys"
+  mkdir -p "$keys_dir"
+  run sbctl_keys_exist_locally "$keys_dir"
+  [ "$status" -eq 0 ]
+}
+
+@test "sbctl_keys_exist_locally false when the keys directory does not exist" {
+  keys_dir="$BATS_TEST_TMPDIR/no-such-keys-dir"
+  run sbctl_keys_exist_locally "$keys_dir"
+  [ "$status" -eq 1 ]
+}
+
 @test "choose_enroll_cmd avoids --firmware-builtin on ASUS boards" {
   result="$(choose_enroll_cmd "ASUSTeK COMPUTER INC." "1")"
   [ "$result" = "/usr/bin/sbctl enroll-keys --microsoft" ]
@@ -75,6 +88,7 @@ setup() {
   detect_secureboot_state() { echo "setup_mode"; }
   keys_enrolled() { return 0; }
   in_setup_mode() { return 0; }
+  sbctl_keys_exist_locally() { return 0; }
   choose_enroll_cmd() { echo "sbctl enroll-keys --microsoft"; }
   find_esp_mountpoint() { echo "/boot/efi"; }
   sign_efi_and_kernels() { emit_event "would_run" "info" "sbctl sign-all"; }
@@ -88,6 +102,7 @@ setup() {
 
 @test "cmd_enable_secureboot re-signs only when Secure Boot already enabled" {
   detect_secureboot_state() { echo "enabled"; }
+  sbctl_keys_exist_locally() { return 0; }
   find_esp_mountpoint() { echo "/boot/efi"; }
   sign_efi_and_kernels() { emit_event "would_run" "info" "sbctl sign-all"; }
   DRY_RUN=1
@@ -96,6 +111,34 @@ setup() {
   [[ "$output" == *"secureboot_done"* ]]
   [[ "$output" != *"create-keys"* ]]
   [[ "$output" != *"enroll-keys"* ]]
+}
+
+@test "cmd_enable_secureboot refuses to sign when Secure Boot is enabled but sbctl has no local keys" {
+  detect_secureboot_state() { echo "enabled"; }
+  sbctl_keys_exist_locally() { return 1; }
+  find_esp_mountpoint() { echo "/boot/efi"; }
+  sign_efi_and_kernels() { echo "SHOULD_NOT_BE_CALLED"; }
+  DRY_RUN=1
+  run cmd_enable_secureboot
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"event":"error"'* ]]
+  [[ "$output" == *"not by this tool"* ]]
+  [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
+}
+
+@test "cmd_enable_secureboot refuses to sign when keys are enrolled but sbctl has no local keys" {
+  detect_secureboot_state() { echo "setup_mode"; }
+  keys_enrolled() { return 0; }
+  in_setup_mode() { return 0; }
+  sbctl_keys_exist_locally() { return 1; }
+  find_esp_mountpoint() { echo "/boot/efi"; }
+  sign_efi_and_kernels() { echo "SHOULD_NOT_BE_CALLED"; }
+  DRY_RUN=1
+  run cmd_enable_secureboot
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"event":"error"'* ]]
+  [[ "$output" == *"not by this tool"* ]]
+  [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
 }
 
 @test "cmd_enable_secureboot creates keys and enrolls when in setup mode with no keys enrolled" {
@@ -192,6 +235,7 @@ setup() {
 
 @test "cmd_enable_secureboot emits an explicit error event when re-signing fails while Secure Boot is already enabled" {
   detect_secureboot_state() { echo "enabled"; }
+  sbctl_keys_exist_locally() { return 0; }
   find_esp_mountpoint() { echo "/boot/efi"; }
   sign_efi_and_kernels() { return 1; }
   DRY_RUN=1
@@ -205,6 +249,7 @@ setup() {
   detect_secureboot_state() { echo "setup_mode"; }
   keys_enrolled() { return 0; }
   in_setup_mode() { return 0; }
+  sbctl_keys_exist_locally() { return 0; }
   find_esp_mountpoint() { echo "/boot/efi"; }
   sign_efi_and_kernels() { return 1; }
   DRY_RUN=1
@@ -212,4 +257,48 @@ setup() {
   [ "$status" -ne 0 ]
   [[ "$output" == *'"event":"error"'* ]]
   [[ "$output" == *"Failed to sign"* ]]
+}
+
+@test "cmd_reset_secureboot_keys previews clearing the local key database under DRY_RUN" {
+  in_setup_mode() { return 0; }
+  DRY_RUN=1
+  result="$(cmd_reset_secureboot_keys)"
+  [[ "$result" == *"would_run"* ]]
+  [[ "$result" == *"/usr/bin/rm -rf /usr/share/secureboot"* ]]
+}
+
+@test "cmd_reset_secureboot_keys tells the user to run enable-secureboot when firmware is in Setup Mode" {
+  in_setup_mode() { return 0; }
+  DRY_RUN=1
+  run cmd_reset_secureboot_keys
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"reset_keys_done"* ]]
+  [[ "$output" == *"you can now run enable-secureboot to start fresh"* ]]
+}
+
+@test "cmd_reset_secureboot_keys tells the user to clear firmware keys manually when not in Setup Mode" {
+  in_setup_mode() { return 1; }
+  DRY_RUN=1
+  run cmd_reset_secureboot_keys
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"reset_keys_done"* ]]
+  [[ "$output" == *"firmware still has existing keys enrolled"* ]]
+  [[ "$output" == *"PK, KEK, db, dbx"* ]]
+}
+
+@test "cmd_reset_secureboot_keys emits an explicit error event and stops when clearing local keys fails" {
+  run_cmd() {
+    if [[ "$1" == "/usr/bin/rm" && "$2" == "-rf" && "$3" == "/usr/share/secureboot" ]]; then
+      return 1
+    fi
+    emit_event "would_run" "info" "$*"
+  }
+  in_setup_mode() { echo "SHOULD_NOT_BE_CALLED"; return 0; }
+  DRY_RUN=1
+  run cmd_reset_secureboot_keys
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"event":"error"'* ]]
+  [[ "$output" == *"Failed to clear local Secure Boot keys"* ]]
+  [[ "$output" != *"reset_keys_done"* ]]
+  [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
 }

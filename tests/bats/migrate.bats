@@ -308,6 +308,7 @@ setup() {
 
 stub_cmd_migrate_happy_path() {
   detect_bootloader() { echo "grub"; }
+  detect_secureboot_state() { echo "disabled"; }
   find_esp_mountpoint() { echo "/boot/efi"; return 0; }
   detect_other_os() { echo ""; }
   detect_luks_root() { return 1; }
@@ -474,6 +475,18 @@ stub_cmd_migrate_happy_path() {
   [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
 }
 
+@test "cmd_migrate refuses immediately when Secure Boot is already enabled in firmware" {
+  stub_cmd_migrate_happy_path
+  detect_secureboot_state() { echo "enabled"; }
+  find_esp_mountpoint() { echo "SHOULD_NOT_BE_CALLED"; return 0; }
+  install_limine_packages() { echo "SHOULD_NOT_BE_CALLED"; }
+  DRY_RUN=1
+  run cmd_migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"event":"error"'* ]]
+  [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
+}
+
 @test "cmd_migrate emits an explicit error event and stops when install_limine_packages fails" {
   stub_cmd_migrate_happy_path
   install_limine_packages() { return 1; }
@@ -557,4 +570,50 @@ stub_cmd_migrate_happy_path() {
   }
   result="$(resolve_esp_disk_and_part "/dev/vda1")"
   [ "$result" = "/dev/vda 1" ]
+}
+
+@test "cmd_apply_theme refuses when Limine is not the active bootloader" {
+  detect_bootloader() { echo "grub"; }
+  find_esp_mountpoint() { echo "SHOULD_NOT_BE_CALLED"; return 0; }
+  write_limine_conf() { echo "SHOULD_NOT_BE_CALLED"; }
+  run cmd_apply_theme
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"event":"error"'* ]]
+  [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
+}
+
+@test "cmd_apply_theme refuses when no EFI system partition is found" {
+  detect_bootloader() { echo "limine"; }
+  find_esp_mountpoint() { return 1; }
+  write_limine_conf() { echo "SHOULD_NOT_BE_CALLED"; }
+  run cmd_apply_theme
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"event":"error"'* ]]
+  [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
+}
+
+@test "cmd_apply_theme refuses when limine.conf does not exist at the ESP mountpoint" {
+  detect_bootloader() { echo "limine"; }
+  find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR"; return 0; }
+  write_limine_conf() { echo "SHOULD_NOT_BE_CALLED"; }
+  run cmd_apply_theme
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"event":"error"'* ]]
+  [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
+}
+
+@test "cmd_apply_theme applies the theme header only, with an empty other_os_list" {
+  detect_bootloader() { echo "limine"; }
+  find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR"; return 0; }
+  : > "$BATS_TEST_TMPDIR/limine.conf"
+  call_args_file="$BATS_TEST_TMPDIR/write_limine_conf_args"
+  write_limine_conf() {
+    printf '%s\n' "$1" > "$call_args_file"
+    printf '%s\n' "$2" >> "$call_args_file"
+  }
+  run cmd_apply_theme
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"apply_theme_done"* ]]
+  [ "$(sed -n '1p' "$call_args_file")" = "$BATS_TEST_TMPDIR/limine.conf" ]
+  [ "$(sed -n '2p' "$call_args_file")" = "" ]
 }

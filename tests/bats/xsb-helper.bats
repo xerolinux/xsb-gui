@@ -101,3 +101,18 @@ run_xsb_helper() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"Setup Mode"* ]]
 }
+
+@test "xsb-helper apply-theme --dry-run applies the theme when the system is already migrated to Limine" {
+  printf '#!/usr/bin/env bash\necho "limine"\n' > "$STUB_BIN/pacman"
+  run run_xsb_helper apply-theme --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"apply_theme_done"* ]]
+}
+
+@test "xsb-helper reset-keys --dry-run previews without mutating anything" {
+  run "${BATS_TEST_DIRNAME}/../../xsb-helper" reset-keys --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"would_run"* ]]
+  [[ "$output" == *"/usr/bin/rm -rf /usr/share/secureboot"* ]]
+  [[ "$output" == *"reset_keys_done"* ]]
+}

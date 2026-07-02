@@ -194,6 +194,11 @@ cmd_migrate() {
         return 1
     fi
 
+    if [[ "$(detect_secureboot_state)" == "enabled" ]]; then
+        emit_event "error" "error" "Secure Boot is already enabled in firmware. Migrating now would leave an unsigned, unbootable Limine after reboot. Reboot into UEFI firmware settings and disable Secure Boot first - it can be safely re-enabled after migration completes, once Limine is signed."
+        return 1
+    fi
+
     local esp_mountpoint
     esp_mountpoint="$(find_esp_mountpoint)" || {
         emit_event "error" "error" "No EFI system partition found. Aborting before any changes."
@@ -268,4 +273,25 @@ cmd_migrate() {
     remove_grub
 
     emit_event "migrate_done" "info" "Migration to Limine complete."
+}
+
+cmd_apply_theme() {
+    if [[ "$(detect_bootloader)" != "limine" ]]; then
+        emit_event "error" "error" "Limine is not the active bootloader. Nothing to theme."
+        return 1
+    fi
+    local esp_mountpoint
+    esp_mountpoint="$(find_esp_mountpoint)" || {
+        emit_event "error" "error" "No EFI system partition found."
+        return 1
+    }
+    if [[ ! -f "${esp_mountpoint}/limine.conf" ]]; then
+        emit_event "error" "error" "${esp_mountpoint}/limine.conf not found."
+        return 1
+    fi
+    write_limine_conf "${esp_mountpoint}/limine.conf" "" || {
+        emit_event "error" "error" "Failed to apply theme to ${esp_mountpoint}/limine.conf."
+        return 1
+    }
+    emit_event "apply_theme_done" "info" "Theme applied to ${esp_mountpoint}/limine.conf."
 }

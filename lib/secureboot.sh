@@ -24,6 +24,11 @@ keys_enrolled() {
     grep -q "Setup Mode:.*Disabled" <<< "$sbctl_status_output"
 }
 
+sbctl_keys_exist_locally() {
+    local keys_dir="${1-/usr/share/secureboot/keys}"
+    [[ -d "$keys_dir" ]]
+}
+
 choose_enroll_cmd() {
     local board_vendor="${1-$(cat /sys/class/dmi/id/board_vendor 2>/dev/null)}"
     local db_default_exists="${2-0}"
@@ -53,27 +58,30 @@ cmd_enable_secureboot() {
     local state
     state="$(detect_secureboot_state)"
 
-    if [[ "$state" == "enabled" ]]; then
-        emit_event "secureboot_step" "info" "Secure Boot already active. Re-signing EFI binaries."
-        local esp_dir
-        esp_dir="$(find_esp_mountpoint)" || esp_dir="/boot/efi"
-        sign_efi_and_kernels "$esp_dir" || {
-            emit_event "error" "error" "Failed to sign EFI binaries/kernels. Secure Boot is already active; unsigned binaries may fail to boot on the next update."
+    if [[ "$state" == "enabled" ]] || keys_enrolled; then
+        if ! sbctl_keys_exist_locally; then
+            emit_event "error" "error" "Secure Boot keys are already enrolled in firmware, but not by this tool. sbctl has no local key database on this system, so it cannot safely sign anything against an unrelated existing enrollment. Reboot into UEFI firmware settings and clear all Secure Boot keys (PK, KEK, db, dbx) to start fresh, then run this again."
             return 1
-        }
-        emit_event "secureboot_done" "info" "Secure Boot re-signing complete."
-        return 0
-    fi
+        fi
 
-    if keys_enrolled; then
-        emit_event "secureboot_step" "info" "Keys already enrolled. Re-signing EFI binaries."
         local esp_dir
         esp_dir="$(find_esp_mountpoint)" || esp_dir="/boot/efi"
-        sign_efi_and_kernels "$esp_dir" || {
-            emit_event "error" "error" "Failed to sign EFI binaries/kernels. Do NOT enable Secure Boot in firmware yet; boot binaries are not signed."
-            return 1
-        }
-        emit_event "secureboot_done" "info" "Reboot into firmware setup and enable Secure Boot."
+
+        if [[ "$state" == "enabled" ]]; then
+            emit_event "secureboot_step" "info" "Secure Boot already active. Re-signing EFI binaries."
+            sign_efi_and_kernels "$esp_dir" || {
+                emit_event "error" "error" "Failed to sign EFI binaries/kernels. Secure Boot is already active; unsigned binaries may fail to boot on the next update."
+                return 1
+            }
+            emit_event "secureboot_done" "info" "Secure Boot re-signing complete."
+        else
+            emit_event "secureboot_step" "info" "Keys already enrolled. Re-signing EFI binaries."
+            sign_efi_and_kernels "$esp_dir" || {
+                emit_event "error" "error" "Failed to sign EFI binaries/kernels. Do NOT enable Secure Boot in firmware yet; boot binaries are not signed."
+                return 1
+            }
+            emit_event "secureboot_done" "info" "Reboot into firmware setup and enable Secure Boot."
+        fi
         return 0
     fi
 
@@ -111,4 +119,17 @@ cmd_enable_secureboot() {
     }
 
     emit_event "secureboot_done" "info" "Secure Boot setup complete. Reboot into firmware settings and enable Secure Boot."
+}
+
+cmd_reset_secureboot_keys() {
+    emit_event "secureboot_step" "info" "Clearing local Secure Boot key database"
+    run_cmd /usr/bin/rm -rf /usr/share/secureboot || {
+        emit_event "error" "error" "Failed to clear local Secure Boot keys."
+        return 1
+    }
+    if in_setup_mode; then
+        emit_event "reset_keys_done" "info" "Local Secure Boot keys cleared. Firmware is in Setup Mode; you can now run enable-secureboot to start fresh."
+    else
+        emit_event "reset_keys_done" "info" "Local Secure Boot keys cleared, but firmware still has existing keys enrolled. Reboot into UEFI firmware settings and clear all Secure Boot keys (PK, KEK, db, dbx) before running enable-secureboot again."
+    fi
 }

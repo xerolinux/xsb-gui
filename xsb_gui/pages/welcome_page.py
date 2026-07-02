@@ -1,6 +1,9 @@
 from PyQt6.QtWidgets import QCheckBox, QLabel, QSizePolicy, QVBoxLayout, QWizardPage
 
 WARNING_TEXT = (
+    "<p>GRUB currently has known compatibility issues with UEFI Secure Boot on "
+    "Arch-based systems and is not recommended if you want Secure Boot enabled. "
+    "This wizard migrates you to Limine, which supports Secure Boot more reliably.</p>"
     "<p>This will <b>permanently remove GRUB</b> and related packages (grub, grub-hooks, "
     "update-grub, os-prober) and their files from this system, install Limine and "
     "limine-mkinitcpio-hook, and set Limine up as the bootloader.</p>"

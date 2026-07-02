@@ -1,5 +1,7 @@
 from PyQt6.QtCore import QProcess, Qt
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget, QWizard, QWizardPage
+from PyQt6.QtWidgets import (
+    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget, QWizard, QWizardPage,
+)
 
 from xsb_gui.helper_runner import HelperRunner
 from xsb_gui.pages.confirm_page import SECUREBOOT_PAGE_ID
@@ -43,9 +45,16 @@ class DonePage(QWizardPage):
         self.label.setWordWrap(True)
         layout.addWidget(self.label)
 
+        layout.addStretch()
+
+        self.footer_separator = QFrame()
+        self.footer_separator.setFrameShape(QFrame.Shape.HLine)
+        self.footer_separator.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(self.footer_separator)
+
         self.button_row = QWidget()
         button_layout = QHBoxLayout(self.button_row)
-        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setContentsMargins(0, 14, 0, 0)
         self.reboot_button = QPushButton("Reboot to BIOS")
         self.later_button = QPushButton("Later")
         button_layout.addWidget(self.reboot_button)
@@ -54,8 +63,6 @@ class DonePage(QWizardPage):
 
         self.reboot_button.clicked.connect(self._on_reboot_clicked)
         self.later_button.clicked.connect(self._on_later_clicked)
-
-        layout.addStretch()
 
         self._splash_runner = None
 
@@ -66,6 +73,7 @@ class DonePage(QWizardPage):
             self.label.setText(DONE_TEXT)
         else:
             self.label.setText(DONE_ALREADY_ACTIVE_TEXT)
+        self.footer_separator.setVisible(needs_reboot)
         self.button_row.setVisible(needs_reboot)
         self.reboot_button.setEnabled(True)
         self.later_button.setEnabled(True)
@@ -86,6 +94,7 @@ class DonePage(QWizardPage):
 
     def _on_later_clicked(self):
         self.button_row.setVisible(False)
+        self.footer_separator.setVisible(False)
 
     def _on_reboot_clicked(self):
         self.reboot_button.setEnabled(False)

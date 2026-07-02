@@ -267,7 +267,7 @@ setup() {
   [[ "$result" == *"### Theme"* ]]
   [[ "$result" == *"term_palette: 232136;eb6f92;9ccfd8;f6c177;3e8fb0;c4a7e7;9ccfd8;e0def4"* ]]
   [[ "$result" == *"term_palette_bright: 6e6a86;eb6f92;9ccfd8;f6c177;3e8fb0;c4a7e7;9ccfd8;e0def4"* ]]
-  [[ "$result" == *"term_background: 232136"* ]]
+  [[ "$result" == *"term_background: 00232136"* ]]
   [[ "$result" == *"term_foreground: e0def4"* ]]
   [[ "$result" == *"term_background_bright: 6e6a86"* ]]
   [[ "$result" == *"term_foreground_bright: e0def4"* ]]

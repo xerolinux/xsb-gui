@@ -95,7 +95,7 @@ setup() {
   DRY_RUN=1
   run cmd_enable_secureboot
   [ "$status" -eq 0 ]
-  [[ "$output" == *"secureboot_done"* ]]
+  [[ "$output" == *"secureboot_needs_reboot"* ]]
   [[ "$output" != *"create-keys"* ]]
   [[ "$output" != *"enroll-keys"* ]]
 }
@@ -108,7 +108,7 @@ setup() {
   DRY_RUN=1
   run cmd_enable_secureboot
   [ "$status" -eq 0 ]
-  [[ "$output" == *"secureboot_done"* ]]
+  [[ "$output" == *"secureboot_already_active"* ]]
   [[ "$output" != *"create-keys"* ]]
   [[ "$output" != *"enroll-keys"* ]]
 }
@@ -153,7 +153,7 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"/usr/bin/sbctl create-keys"* ]]
   [[ "$output" == *"sbctl enroll-keys --microsoft"* ]]
-  [[ "$output" == *"secureboot_done"* ]]
+  [[ "$output" == *"secureboot_needs_reboot"* ]]
 }
 
 @test "cmd_enable_secureboot's board_vendor lookup does not abort under set -euo pipefail when the DMI sysfs file is missing" {
@@ -174,7 +174,7 @@ setup() {
   "
   [ "$status" -eq 0 ]
   [[ "$output" == *"REACHED_END"* ]]
-  [[ "$output" == *"secureboot_done"* ]]
+  [[ "$output" == *"secureboot_needs_reboot"* ]]
 }
 
 @test "cmd_enable_secureboot emits an explicit error event and stops when sbctl create-keys fails" {

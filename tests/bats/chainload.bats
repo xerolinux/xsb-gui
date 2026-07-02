@@ -41,6 +41,21 @@ setup() {
   [ "$result" = "Windows Boot Manager" ]
 }
 
+@test "detect_other_os returns nothing for real OVMF network-boot and optical-drive firmware entries (no real dual-boot)" {
+  # Real sample reconstructed from a live XeroLinux VM (OVMF firmware) preflight run:
+  # the Limine boot menu showed bogus "UEFI PXEv4/PXEv6/HTTPv4/HTTPv6 (MAC:...)" and
+  # "UEFI QEMU DVD-ROM QM00001" entries alongside XeroLinux.
+  sample=$'BootCurrent: 0001\nBootOrder: 0000,0001,0002,0003,0004,0005\nBoot0000* XeroLinux\tHD(1,GPT,...)\nBoot0001* UEFI PXEv4 (MAC:525400123456)\tPciRoot(0x0)/Pci(0x3,0x0)/MAC(525400123456,0)/IPv4(0.0.0.0,0x0,DHCP,0.0.0.0,0.0.0.0,0.0.0.0)\nBoot0002* UEFI PXEv6 (MAC:525400123456)\tPciRoot(0x0)/Pci(0x3,0x0)/MAC(525400123456,0)/IPv6([::],0x0,Static,[::],[::],0)\nBoot0003* UEFI HTTPv4 (MAC:525400123456)\tPciRoot(0x0)/Pci(0x3,0x0)/MAC(525400123456,0)/IPv4(0.0.0.0,0x0,DHCP,0.0.0.0,0.0.0.0,0.0.0.0)/Uri()\nBoot0004* UEFI HTTPv6 (MAC:525400123456)\tPciRoot(0x0)/Pci(0x3,0x0)/MAC(525400123456,0)/IPv6([::],0x0,Static,[::],[::],0)/Uri()\nBoot0005* UEFI QEMU DVD-ROM QM00001\tPciRoot(0x0)/Pci(0x1,0x1)/Ata(1,0,0)'
+  result="$(detect_other_os "$sample")"
+  [ -z "$result" ]
+}
+
+@test "detect_other_os still finds Windows Boot Manager amid a mix of excluded firmware entries" {
+  sample=$'BootCurrent: 0001\nBootOrder: 0000,0001,0002,0003,0004,0005,0006\nBoot0000* XeroLinux\tHD(1,GPT,...)\nBoot0001* UEFI PXEv4 (MAC:525400123456)\tPciRoot(0x0)/Pci(0x3,0x0)/MAC(525400123456,0)/IPv4(0.0.0.0,0x0,DHCP,0.0.0.0,0.0.0.0,0.0.0.0)\nBoot0002* UEFI HTTPv6 (MAC:525400123456)\tPciRoot(0x0)/Pci(0x3,0x0)/MAC(525400123456,0)/IPv6([::],0x0,Static,[::],[::],0)/Uri()\nBoot0003* UEFI QEMU DVD-ROM QM00001\tPciRoot(0x0)/Pci(0x1,0x1)/Ata(1,0,0)\nBoot0004* Windows Boot Manager\tHD(1,GPT,...)\nBoot0005* UEFI PXEv6 (MAC:525400123456)\tPciRoot(0x0)/Pci(0x3,0x0)/MAC(525400123456,0)/IPv6([::],0x0,Static,[::],[::],0)\nBoot0006* UEFI HTTPv4 (MAC:525400123456)\tPciRoot(0x0)/Pci(0x3,0x0)/MAC(525400123456,0)/IPv4(0.0.0.0,0x0,DHCP,0.0.0.0,0.0.0.0,0.0.0.0)/Uri()'
+  result="$(detect_other_os "$sample")"
+  [ "$result" = "Windows Boot Manager" ]
+}
+
 @test "has_non_windows_other_os false for empty input" {
   run has_non_windows_other_os ""
   [ "$status" -eq 1 ]

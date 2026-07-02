@@ -5,6 +5,6 @@ XeroLinux system from GRUB to Limine and enables Secure Boot Support via sbctl.
 
 <div align="center">
 
-![App Preview](Preview.webp)
+![App Preview](SBPreview.webp)
 
 </div>

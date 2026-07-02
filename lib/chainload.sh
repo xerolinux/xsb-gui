@@ -5,7 +5,7 @@ detect_other_os() {
     local efibootmgr_output="${1-$(efibootmgr -v 2>/dev/null)}"
     grep -E '^Boot[0-9A-Fa-f]{4}\*?[[:space:]]' <<< "$efibootmgr_output" \
         | grep -viE 'xerolinux|limine' \
-        | grep -viE 'BootManagerMenu|EFI Firmware Setup|UEFI Misc Device|UEFI Shell|Internal Shell|Diagnostic Splash' \
+        | grep -viE 'BootManagerMenu|EFI Firmware Setup|UEFI Misc Device|UEFI Shell|Internal Shell|Diagnostic Splash|PXEv4|PXEv6|HTTPv4|HTTPv6|DVD-ROM|CD-ROM' \
         | sed -E 's/^Boot[0-9A-Fa-f]{4}\*?[[:space:]]+//' \
         | sed -E 's/\t.*$//' \
         || true

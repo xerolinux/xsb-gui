@@ -73,14 +73,14 @@ cmd_enable_secureboot() {
                 emit_event "error" "error" "Failed to sign EFI binaries/kernels. Secure Boot is already active; unsigned binaries may fail to boot on the next update."
                 return 1
             }
-            emit_event "secureboot_done" "info" "Secure Boot re-signing complete."
+            emit_event "secureboot_already_active" "info" "Secure Boot re-signing complete."
         else
             emit_event "secureboot_step" "info" "Keys already enrolled. Re-signing EFI binaries."
             sign_efi_and_kernels "$esp_dir" || {
                 emit_event "error" "error" "Failed to sign EFI binaries/kernels. Do NOT enable Secure Boot in firmware yet; boot binaries are not signed."
                 return 1
             }
-            emit_event "secureboot_done" "info" "Reboot into firmware setup and enable Secure Boot."
+            emit_event "secureboot_needs_reboot" "info" "Reboot into firmware setup and enable Secure Boot."
         fi
         return 0
     fi
@@ -118,7 +118,7 @@ cmd_enable_secureboot() {
         return 1
     }
 
-    emit_event "secureboot_done" "info" "Secure Boot setup complete. Reboot into firmware settings and enable Secure Boot."
+    emit_event "secureboot_needs_reboot" "info" "Secure Boot setup complete. Reboot into firmware settings and enable Secure Boot."
 }
 
 cmd_reset_secureboot_keys() {

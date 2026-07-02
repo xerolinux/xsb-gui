@@ -24,7 +24,7 @@ export DRY_RUN
 case "$subcommand" in
     preflight) cmd_preflight ;;
     migrate) cmd_migrate ;;
-    apply-theme) cmd_apply_theme ;;
+    apply-splash) cmd_apply_splash ;;
     enable-secureboot) cmd_enable_secureboot ;;
     reset-keys) cmd_reset_secureboot_keys ;;
     status) cmd_status ;;

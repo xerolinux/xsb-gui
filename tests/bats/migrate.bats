@@ -233,12 +233,11 @@ setup() {
   grep -q "/Windows Boot Manager" "$target"
 }
 
-@test "write_limine_conf adds no chainload block when there is no other OS, but still prepends the theme header" {
+@test "write_limine_conf adds no chainload block when there is no other OS" {
   target="$BATS_TEST_TMPDIR/limine.conf"
   printf 'timeout: 5\ndefault_entry: 1\n' > "$target"
   write_limine_conf "$target" ""
   content="$(cat "$target")"
-  [[ "$content" == *"### Theme"* ]]
   [[ "$content" == *"timeout: 5"* ]]
   [[ "$content" != *"protocol: efi_chainload"* ]]
 }
@@ -262,48 +261,76 @@ setup() {
   [ ! -e "$target" ]
 }
 
-@test "build_limine_theme_header emits the fixed Rose Pine theme block" {
-  result="$(build_limine_theme_header)"
+@test "build_limine_splash_header emits the wallpaper-only theme block" {
+  result="$(build_limine_splash_header)"
   [[ "$result" == *"### Theme"* ]]
-  [[ "$result" == *"term_palette: 232136;eb6f92;9ccfd8;f6c177;3e8fb0;c4a7e7;9ccfd8;e0def4"* ]]
-  [[ "$result" == *"term_palette_bright: 6e6a86;eb6f92;9ccfd8;f6c177;3e8fb0;c4a7e7;9ccfd8;e0def4"* ]]
-  [[ "$result" == *"term_background: 00232136"* ]]
-  [[ "$result" == *"term_foreground: e0def4"* ]]
-  [[ "$result" == *"term_background_bright: 6e6a86"* ]]
-  [[ "$result" == *"term_foreground_bright: e0def4"* ]]
+  [[ "$result" == *"wallpaper: boot():/splash.png"* ]]
 }
 
-@test "write_limine_conf prepends the theme header first, keeps existing content, then appends chainload stanzas at the bottom" {
+@test "write_limine_splash prepends the splash header when no existing theme section is present" {
   target="$BATS_TEST_TMPDIR/limine.conf"
   printf 'timeout: 5\ndefault_entry: 1\n\n/XeroLinux\n    protocol: linux\n' > "$target"
-  write_limine_conf "$target" "Windows Boot Manager"
-  theme_line="$(grep -n '^### Theme$' "$target" | head -1 | cut -d: -f1)"
-  orig_line="$(grep -n '^timeout: 5$' "$target" | head -1 | cut -d: -f1)"
-  chain_line="$(grep -n '/Windows Boot Manager' "$target" | head -1 | cut -d: -f1)"
+  write_limine_splash "$target"
+  content="$(cat "$target")"
+  [[ "$content" == *"### Theme"* ]]
+  [[ "$content" == *"wallpaper: boot():/splash.png"* ]]
+  [[ "$content" == *"timeout: 5"* ]]
+  [[ "$content" == *"/XeroLinux"* ]]
+  [[ "$content" == *"protocol: linux"* ]]
+  count="$(grep -c '^### Theme$' "$target")"
+  [ "$count" -eq 1 ]
   [ "$(head -1 "$target")" = "### Theme" ]
-  [ -n "$theme_line" ]
-  [ -n "$orig_line" ]
-  [ -n "$chain_line" ]
-  [ "$theme_line" -lt "$orig_line" ]
-  [ "$orig_line" -lt "$chain_line" ]
 }
 
-@test "write_limine_conf preserves the original file's permission bits across the temp-file swap" {
+@test "write_limine_splash replaces an existing old palette-style theme section with the wallpaper-only header, leaving no leftover palette lines" {
+  target="$BATS_TEST_TMPDIR/limine.conf"
+  printf '### Theme\nterm_palette: 232136;eb6f92;9ccfd8;f6c177;3e8fb0;c4a7e7;9ccfd8;e0def4\nterm_background: 00232136\nterm_foreground: e0def4\n\ntimeout: 5\ndefault_entry: 1\n\n/XeroLinux\n    protocol: linux\n\n/Windows Boot Manager\n    protocol: efi_chainload\n' > "$target"
+  write_limine_splash "$target"
+  content="$(cat "$target")"
+  [[ "$content" == *"### Theme"* ]]
+  [[ "$content" == *"wallpaper: boot():/splash.png"* ]]
+  [[ "$content" != *"term_palette"* ]]
+  [[ "$content" != *"term_background"* ]]
+  [[ "$content" != *"term_foreground"* ]]
+  count="$(grep -c '^### Theme$' "$target")"
+  [ "$count" -eq 1 ]
+  [[ "$content" == *"timeout: 5"* ]]
+  [[ "$content" == *"/XeroLinux"* ]]
+  [[ "$content" == *"protocol: linux"* ]]
+  [[ "$content" == *"/Windows Boot Manager"* ]]
+  [[ "$content" == *"protocol: efi_chainload"* ]]
+}
+
+@test "write_limine_splash preserves the original file's permission bits" {
   target="$BATS_TEST_TMPDIR/limine.conf"
   printf 'timeout: 5\ndefault_entry: 1\n' > "$target"
   chmod 644 "$target"
-  write_limine_conf "$target" ""
+  write_limine_splash "$target"
   mode="$(stat -c '%a' "$target")"
   [ "$mode" = "644" ]
 }
 
-@test "write_limine_conf does not duplicate the theme header when run twice against the same file" {
+@test "write_limine_splash previews without writing when DRY_RUN=1" {
   target="$BATS_TEST_TMPDIR/limine.conf"
   printf 'timeout: 5\ndefault_entry: 1\n' > "$target"
-  write_limine_conf "$target" "Windows Boot Manager"
-  write_limine_conf "$target" "Windows Boot Manager"
-  count="$(grep -c '^### Theme$' "$target")"
-  [ "$count" -eq 1 ]
+  DRY_RUN=1
+  result="$(write_limine_splash "$target")"
+  [[ "$result" == *"would_run"* ]]
+  content="$(cat "$target")"
+  [[ "$content" != *"### Theme"* ]]
+  [[ "$content" == "timeout: 5"$'\n'"default_entry: 1" ]]
+}
+
+@test "verify_wallpaper_source_exists true when the wallpaper file is present" {
+  wallpaper="$BATS_TEST_TMPDIR/Xero-Plasma4.png"
+  : > "$wallpaper"
+  run verify_wallpaper_source_exists "$wallpaper"
+  [ "$status" -eq 0 ]
+}
+
+@test "verify_wallpaper_source_exists false when the wallpaper file is absent" {
+  run verify_wallpaper_source_exists "$BATS_TEST_TMPDIR/does-not-exist.png"
+  [ "$status" -eq 1 ]
 }
 
 stub_cmd_migrate_happy_path() {
@@ -572,48 +599,61 @@ stub_cmd_migrate_happy_path() {
   [ "$result" = "/dev/vda 1" ]
 }
 
-@test "cmd_apply_theme refuses when Limine is not the active bootloader" {
+@test "cmd_apply_splash refuses when Limine is not the active bootloader" {
   detect_bootloader() { echo "grub"; }
   find_esp_mountpoint() { echo "SHOULD_NOT_BE_CALLED"; return 0; }
-  write_limine_conf() { echo "SHOULD_NOT_BE_CALLED"; }
-  run cmd_apply_theme
+  write_limine_splash() { echo "SHOULD_NOT_BE_CALLED"; }
+  run cmd_apply_splash
   [ "$status" -ne 0 ]
   [[ "$output" == *'"event":"error"'* ]]
   [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
 }
 
-@test "cmd_apply_theme refuses when no EFI system partition is found" {
+@test "cmd_apply_splash refuses when no EFI system partition is found" {
   detect_bootloader() { echo "limine"; }
   find_esp_mountpoint() { return 1; }
-  write_limine_conf() { echo "SHOULD_NOT_BE_CALLED"; }
-  run cmd_apply_theme
+  write_limine_splash() { echo "SHOULD_NOT_BE_CALLED"; }
+  run cmd_apply_splash
   [ "$status" -ne 0 ]
   [[ "$output" == *'"event":"error"'* ]]
   [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
 }
 
-@test "cmd_apply_theme refuses when limine.conf does not exist at the ESP mountpoint" {
+@test "cmd_apply_splash refuses when limine.conf does not exist at the ESP mountpoint" {
   detect_bootloader() { echo "limine"; }
   find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR"; return 0; }
-  write_limine_conf() { echo "SHOULD_NOT_BE_CALLED"; }
-  run cmd_apply_theme
+  write_limine_splash() { echo "SHOULD_NOT_BE_CALLED"; }
+  run cmd_apply_splash
   [ "$status" -ne 0 ]
   [[ "$output" == *'"event":"error"'* ]]
   [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
 }
 
-@test "cmd_apply_theme applies the theme header only, with an empty other_os_list" {
+@test "cmd_apply_splash refuses when the XeroLinux wallpaper source file is missing" {
   detect_bootloader() { echo "limine"; }
   find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR"; return 0; }
   : > "$BATS_TEST_TMPDIR/limine.conf"
-  call_args_file="$BATS_TEST_TMPDIR/write_limine_conf_args"
-  write_limine_conf() {
-    printf '%s\n' "$1" > "$call_args_file"
-    printf '%s\n' "$2" >> "$call_args_file"
-  }
-  run cmd_apply_theme
+  verify_wallpaper_source_exists() { return 1; }
+  run_cmd() { echo "SHOULD_NOT_BE_CALLED"; }
+  write_limine_splash() { echo "SHOULD_NOT_BE_CALLED"; }
+  run cmd_apply_splash
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"event":"error"'* ]]
+  [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
+}
+
+@test "cmd_apply_splash copies the wallpaper to the ESP and writes the splash header on success" {
+  detect_bootloader() { echo "limine"; }
+  find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR"; return 0; }
+  : > "$BATS_TEST_TMPDIR/limine.conf"
+  verify_wallpaper_source_exists() { return 0; }
+  run_cmd_args_file="$BATS_TEST_TMPDIR/run_cmd_args"
+  run_cmd() { printf '%s\n' "$*" >> "$run_cmd_args_file"; }
+  write_limine_splash_args_file="$BATS_TEST_TMPDIR/write_limine_splash_args"
+  write_limine_splash() { printf '%s\n' "$1" > "$write_limine_splash_args_file"; }
+  run cmd_apply_splash
   [ "$status" -eq 0 ]
-  [[ "$output" == *"apply_theme_done"* ]]
-  [ "$(sed -n '1p' "$call_args_file")" = "$BATS_TEST_TMPDIR/limine.conf" ]
-  [ "$(sed -n '2p' "$call_args_file")" = "" ]
+  [[ "$output" == *"apply_splash_done"* ]]
+  grep -q "/usr/bin/cp /usr/share/wallpapers/Xero-Plasma4.png $BATS_TEST_TMPDIR/splash.png" "$run_cmd_args_file"
+  [ "$(cat "$write_limine_splash_args_file")" = "$BATS_TEST_TMPDIR/limine.conf" ]
 }

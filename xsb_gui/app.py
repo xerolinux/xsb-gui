@@ -8,10 +8,11 @@ from xsb_gui.pages.welcome_page import WelcomePage
 from xsb_gui.pages.preflight_page import PreflightPage
 from xsb_gui.pages.confirm_page import (
     ConfirmPage, WELCOME_PAGE_ID, PREFLIGHT_PAGE_ID, CONFIRM_PAGE_ID,
-    MIGRATE_PAGE_ID, SECUREBOOT_PAGE_ID, DONE_PAGE_ID,
+    MIGRATE_PAGE_ID, SECUREBOOT_PAGE_ID, DONE_PAGE_ID, SECUREBOOT_ERROR_PAGE_ID,
 )
 from xsb_gui.pages.migrate_page import MigratePage
 from xsb_gui.pages.secureboot_page import SecureBootPage
+from xsb_gui.pages.secureboot_error_page import SecureBootErrorPage
 from xsb_gui.pages.done_page import DonePage
 
 
@@ -39,7 +40,8 @@ def build_wizard(helper_path=HELPER_PATH, use_pkexec=True):
     wizard.setPage(CONFIRM_PAGE_ID, ConfirmPage())
     wizard.setPage(MIGRATE_PAGE_ID, MigratePage(helper_path=helper_path, use_pkexec=use_pkexec))
     wizard.setPage(SECUREBOOT_PAGE_ID, SecureBootPage(helper_path=helper_path, use_pkexec=use_pkexec))
-    wizard.setPage(DONE_PAGE_ID, DonePage())
+    wizard.setPage(SECUREBOOT_ERROR_PAGE_ID, SecureBootErrorPage())
+    wizard.setPage(DONE_PAGE_ID, DonePage(helper_path=helper_path, use_pkexec=use_pkexec))
     return wizard
 
 

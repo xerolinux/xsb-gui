@@ -8,6 +8,7 @@ CONFIRM_PAGE_ID = 2
 MIGRATE_PAGE_ID = 3
 SECUREBOOT_PAGE_ID = 4
 DONE_PAGE_ID = 5
+SECUREBOOT_ERROR_PAGE_ID = 6
 
 SECUREBOOT_ALREADY_ENABLED_WARNING = (
     "Secure Boot is already enabled in your firmware. Migrating now would leave an "

@@ -33,18 +33,6 @@ build_limine_conf() {
     fi
 }
 
-build_limine_theme_header() {
-    cat <<'EOF'
-### Theme
-term_palette: 232136;eb6f92;9ccfd8;f6c177;3e8fb0;c4a7e7;9ccfd8;e0def4
-term_palette_bright: 6e6a86;eb6f92;9ccfd8;f6c177;3e8fb0;c4a7e7;9ccfd8;e0def4
-term_background: 00232136
-term_foreground: e0def4
-term_background_bright: 6e6a86
-term_foreground_bright: e0def4
-EOF
-}
-
 resolve_root_cmdline_params() {
     local luks="$1" mkinitcpio_hook="$2" root_uuid="$3" crypttab_content="${4-$(cat /etc/crypttab 2>/dev/null)}"
     if [[ "$luks" != "true" ]]; then
@@ -165,17 +153,8 @@ remove_grub() {
 write_limine_conf() {
     local path="${1-/boot/efi/limine.conf}" other_os_list="${2-}"
     if [[ "${DRY_RUN:-0}" == "1" ]]; then
-        emit_event "would_run" "info" "prepend theme header and append chainload entries to $path"
+        emit_event "would_run" "info" "append chainload entries to $path"
         return 0
-    fi
-    if ! grep -q '^### Theme$' "$path" 2>/dev/null; then
-        local tmp
-        tmp="$(mktemp "${path}.XXXXXX" 2>/dev/null || mktemp)"
-        build_limine_theme_header > "$tmp"
-        printf '\n' >> "$tmp"
-        cat "$path" >> "$tmp" 2>/dev/null
-        chmod --reference="$path" "$tmp" 2>/dev/null || true
-        mv "$tmp" "$path"
     fi
     if [[ -n "$other_os_list" ]]; then
         build_limine_conf "$other_os_list" >> "$path"
@@ -275,9 +254,45 @@ cmd_migrate() {
     emit_event "migrate_done" "info" "Migration to Limine complete."
 }
 
-cmd_apply_theme() {
+build_limine_splash_header() {
+    printf '### Theme\nwallpaper: boot():/splash.png\n\n'
+}
+
+# Idempotently (re)writes the ### Theme section at the top of <path> so it
+# contains only the wallpaper directive. Any prior ### Theme section is
+# fully replaced rather than appended alongside - this matters for systems
+# migrated before this feature existed, whose limine.conf may still carry
+# the old palette-based ### Theme block (term_palette/term_background/etc)
+# that this tool used to write; those stale color directives must not be
+# left sitting next to the new wallpaper line.
+write_limine_splash() {
+    local path="$1"
+    if [[ "${DRY_RUN:-0}" == "1" ]]; then
+        emit_event "would_run" "info" "write splash wallpaper header to $path"
+        return 0
+    fi
+    local tmp
+    tmp="$(mktemp)"
+    awk '
+        /^### Theme/ { skip=1; next }
+        skip && (/^###/ || NF==0) { skip=0 }
+        skip { next }
+        { print }
+    ' "$path" > "$tmp"
+    { build_limine_splash_header; cat "$tmp"; } > "${path}.new"
+    rm -f "$tmp"
+    chmod --reference="$path" "${path}.new" 2>/dev/null || true
+    mv "${path}.new" "$path"
+}
+
+verify_wallpaper_source_exists() {
+    local wallpaper_path="${1-/usr/share/wallpapers/Xero-Plasma4.png}"
+    [[ -f "$wallpaper_path" ]]
+}
+
+cmd_apply_splash() {
     if [[ "$(detect_bootloader)" != "limine" ]]; then
-        emit_event "error" "error" "Limine is not the active bootloader. Nothing to theme."
+        emit_event "error" "error" "Limine is not the active bootloader. Nothing to splash."
         return 1
     fi
     local esp_mountpoint
@@ -289,9 +304,18 @@ cmd_apply_theme() {
         emit_event "error" "error" "${esp_mountpoint}/limine.conf not found."
         return 1
     fi
-    write_limine_conf "${esp_mountpoint}/limine.conf" "" || {
-        emit_event "error" "error" "Failed to apply theme to ${esp_mountpoint}/limine.conf."
+    if ! verify_wallpaper_source_exists; then
+        emit_event "error" "error" "XeroLinux wallpaper not found at /usr/share/wallpapers/Xero-Plasma4.png."
+        return 1
+    fi
+    emit_event "splash_step" "info" "Copying boot splash wallpaper"
+    run_cmd /usr/bin/cp /usr/share/wallpapers/Xero-Plasma4.png "${esp_mountpoint}/splash.png" || {
+        emit_event "error" "error" "Failed to copy splash wallpaper."
         return 1
     }
-    emit_event "apply_theme_done" "info" "Theme applied to ${esp_mountpoint}/limine.conf."
+    write_limine_splash "${esp_mountpoint}/limine.conf" || {
+        emit_event "error" "error" "Failed to update ${esp_mountpoint}/limine.conf with splash wallpaper."
+        return 1
+    }
+    emit_event "apply_splash_done" "info" "Boot splash applied to ${esp_mountpoint}/limine.conf."
 }

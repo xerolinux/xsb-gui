@@ -102,11 +102,11 @@ run_xsb_helper() {
   [[ "$output" == *"Setup Mode"* ]]
 }
 
-@test "xsb-helper apply-theme --dry-run applies the theme when the system is already migrated to Limine" {
+@test "xsb-helper apply-splash --dry-run applies the splash when the system is already migrated to Limine" {
   printf '#!/usr/bin/env bash\necho "limine"\n' > "$STUB_BIN/pacman"
-  run run_xsb_helper apply-theme --dry-run
+  run run_xsb_helper apply-splash --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"apply_theme_done"* ]]
+  [[ "$output" == *"apply_splash_done"* ]]
 }
 
 @test "xsb-helper reset-keys --dry-run previews without mutating anything" {

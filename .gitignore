@@ -5,3 +5,8 @@ push.sh
 *.pkg.tar.zst
 pkg/
 src/
+*.swp
+*.kate-swp
+*~
+.vscode/
+.idea/

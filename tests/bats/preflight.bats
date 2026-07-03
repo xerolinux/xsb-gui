@@ -94,8 +94,26 @@ setup() {
 }
 
 @test "emit_preflight_result produces valid, well-formed JSON" {
+  result="$(emit_preflight_result true true "/boot/efi" "grub" false "none" '[]' "disabled" "1073741824")"
+  echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['event']=='preflight_result'; assert d['data']['bootloader']=='grub'; assert d['data']['esp_size_bytes']==1073741824"
+}
+
+@test "emit_preflight_result defaults esp_size_bytes to 0 when omitted" {
   result="$(emit_preflight_result true true "/boot/efi" "grub" false "none" '[]' "disabled")"
-  echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['event']=='preflight_result'; assert d['data']['bootloader']=='grub'"
+  echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['data']['esp_size_bytes']==0"
+}
+
+@test "detect_esp_size_bytes returns failure when no mountpoint given" {
+  run detect_esp_size_bytes ""
+  [ "$status" -eq 1 ]
+}
+
+@test "detect_esp_size_bytes reads size via findmnt and lsblk" {
+  findmnt() { echo "/dev/sda1"; }
+  lsblk() { echo "1073741824"; }
+  export -f findmnt lsblk
+  result="$(detect_esp_size_bytes "/boot/efi")"
+  [ "$result" = "1073741824" ]
 }
 
 @test "cmd_preflight (not UEFI) emits an error and exits non-zero" {
@@ -109,6 +127,7 @@ setup() {
 @test "cmd_preflight (UEFI) emits preflight_result" {
   is_uefi() { return 0; }
   find_esp_mountpoint() { echo "/boot/efi"; return 0; }
+  detect_esp_size_bytes() { echo "1073741824"; }
   detect_partition_table() { return 0; }
   detect_bootloader() { echo "grub"; }
   detect_luks_root() { return 1; }
@@ -119,4 +138,5 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *'"event":"preflight_result"'* ]]
   [[ "$output" == *'"bootloader":"grub"'* ]]
+  [[ "$output" == *'"esp_size_bytes":1073741824'* ]]
 }

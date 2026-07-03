@@ -1,5 +1,6 @@
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWizardPage
 
+from xsb_gui.esp_size_check import is_esp_too_small, show_esp_too_small_popup
 from xsb_gui.helper_runner import HelperRunner
 from xsb_gui.parsing import parse_preflight_result
 
@@ -18,12 +19,14 @@ class PreflightPage(QWizardPage):
         layout.addStretch()
 
         self.result = None
+        self._esp_too_small = False
         self._helper_path = helper_path
         self._use_pkexec = use_pkexec
         self.runner = None
 
     def initializePage(self):
         self.result = None
+        self._esp_too_small = False
         self.runner = HelperRunner(helper_path=self._helper_path, use_pkexec=self._use_pkexec)
         self.runner.event_received.connect(self._on_event)
         self.runner.finished.connect(self._on_finished)
@@ -34,6 +37,12 @@ class PreflightPage(QWizardPage):
     def _on_event(self, event):
         if event["event"] == "preflight_result":
             self.result = parse_preflight_result(event)
+            if is_esp_too_small(self.result.esp_size_bytes):
+                self._esp_too_small = True
+                self._status_label.setText("EFI system partition is too small.")
+                self.completeChanged.emit()
+                show_esp_too_small_popup(self, self.result.esp_size_bytes)
+                return
             self._status_label.setText("Checks complete.")
             self.completeChanged.emit()
         elif event["event"] == "error":
@@ -53,4 +62,4 @@ class PreflightPage(QWizardPage):
         self._status_label.setText(f"{self._status_label.text()}\n{line}")
 
     def isComplete(self):
-        return self.result is not None
+        return self.result is not None and not self._esp_too_small

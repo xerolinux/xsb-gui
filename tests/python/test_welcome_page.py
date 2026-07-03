@@ -1,6 +1,7 @@
 from PyQt6.QtCore import Qt
 
 from xsb_gui.pages.welcome_page import CAUTION_TEXT, WelcomePage
+from xsb_gui.widgets.marching_ants_frame import MarchingAntsFrame
 
 
 def test_welcome_page_blocks_next_until_checkbox_is_checked(qtbot):
@@ -18,15 +19,16 @@ def test_welcome_page_blocks_next_until_checkbox_is_checked(qtbot):
 def test_welcome_page_shows_caution_pill(qtbot):
     page = WelcomePage()
     qtbot.addWidget(page)
-    assert page.caution_label.text() == CAUTION_TEXT
-    assert "background-color: #c0392b" in page.caution_label.styleSheet()
+    assert isinstance(page.caution_label, MarchingAntsFrame)
+    assert page.caution_label.label.text() == CAUTION_TEXT
 
 
-def test_welcome_page_checkbox_is_last_layout_item(qtbot):
+def test_welcome_page_checkbox_is_last_widget(qtbot):
     page = WelcomePage()
     qtbot.addWidget(page)
     layout = page.layout()
-    assert layout.itemAt(layout.count() - 1).widget() is page.understand_checkbox
+    widgets = [layout.itemAt(i).widget() for i in range(layout.count()) if layout.itemAt(i).widget()]
+    assert widgets[-1] is page.understand_checkbox
 
 
 def test_welcome_page_caution_pill_comes_after_the_explanation_paragraph(qtbot):

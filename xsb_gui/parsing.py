@@ -11,6 +11,7 @@ class PreflightResult:
     mkinitcpio_hook: str
     other_os: list
     secureboot_state: str
+    esp_size_bytes: int
 
 
 def parse_preflight_result(event: dict) -> PreflightResult:
@@ -24,6 +25,7 @@ def parse_preflight_result(event: dict) -> PreflightResult:
         mkinitcpio_hook=data["mkinitcpio_hook"],
         other_os=list(data["other_os"]),
         secureboot_state=data["secureboot_state"],
+        esp_size_bytes=data.get("esp_size_bytes", 0),
     )
 
 

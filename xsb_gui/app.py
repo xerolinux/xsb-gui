@@ -14,6 +14,7 @@ from xsb_gui.pages.migrate_page import MigratePage
 from xsb_gui.pages.secureboot_page import SecureBootPage
 from xsb_gui.pages.secureboot_error_page import SecureBootErrorPage
 from xsb_gui.pages.done_page import DonePage
+from xsb_gui.distro_check import maybe_warn_unsupported_distro
 
 
 def _resolve_helper_path():
@@ -69,6 +70,11 @@ def build_wizard(helper_path=HELPER_PATH, use_pkexec=True):
     wizard.setPage(SECUREBOOT_PAGE_ID, SecureBootPage(helper_path=helper_path, use_pkexec=use_pkexec))
     wizard.setPage(SECUREBOOT_ERROR_PAGE_ID, SecureBootErrorPage())
     wizard.setPage(DONE_PAGE_ID, DonePage(helper_path=helper_path, use_pkexec=use_pkexec))
+    # QWizardPage.sizeHint() overestimates height for pages with wrapped
+    # rich-text QLabels (Qt heightForWidth quirk), which makes QWizard
+    # auto-size the window far taller than the content needs. Pin an
+    # explicit size instead of trusting sizeHint.
+    wizard.resize(720, 680)
     return wizard
 
 
@@ -76,6 +82,7 @@ def main():
     app = QApplication(sys.argv)
     wizard = build_wizard()
     wizard.show()
+    maybe_warn_unsupported_distro(wizard)
     sys.exit(app.exec())
 
 

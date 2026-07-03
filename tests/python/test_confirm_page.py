@@ -19,7 +19,7 @@ def test_confirm_page_shows_summary_from_preflight_result(qtbot):
     result = PreflightResult(
         uefi=True, gpt=True, esp_mountpoint="/boot/efi", bootloader="grub",
         luks=False, mkinitcpio_hook="none", other_os=["Windows Boot Manager"],
-        secureboot_state="disabled",
+        secureboot_state="disabled", esp_size_bytes=1073741824,
     )
     page = ConfirmPage()
     qtbot.addWidget(page)
@@ -38,7 +38,7 @@ def test_confirm_page_blocks_when_secureboot_already_enabled(qtbot):
     result = PreflightResult(
         uefi=True, gpt=True, esp_mountpoint="/boot/efi", bootloader="grub",
         luks=False, mkinitcpio_hook="none", other_os=["Windows Boot Manager"],
-        secureboot_state="enabled",
+        secureboot_state="enabled", esp_size_bytes=1073741824,
     )
     page = ConfirmPage()
     qtbot.addWidget(page)

@@ -1,13 +1,15 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QCheckBox, QLabel, QSizePolicy, QVBoxLayout, QWizardPage
 
+from xsb_gui.widgets.marching_ants_frame import MarchingAntsFrame
+
 CAUTION_TEXT = (
     '<p align="center">⚠ USE AT YOUR OWN RISK ⚠</p>'
-    '<p align="justify">This tool replaces your bootloader and changes Secure Boot '
-    "enrollment at the firmware level. Turn Secure Boot off and clear any existing keys "
-    "before proceeding. If interrupted or misconfigured, your system can become unbootable "
-    "and may need manual recovery from a live USB. Backups are strongly recommended in case "
-    "something goes wrong.</p>"
+    '<p align="justify">Pop quiz: what beats a fresh Limine and Secure Boot setup? A backup '
+    "of your data, taken about five minutes ago. Before you hit Next: open your firmware "
+    "setup, turn Secure Boot off, and clear out any old keys sitting in there. Skip that "
+    "prep and a hiccup mid-migration means a live-USB repair job instead of a quick "
+    "reboot.</p>"
 )
 
 WARNING_TEXT = (
@@ -36,15 +38,12 @@ class WelcomePage(QWizardPage):
         label.setWordWrap(True)
         layout.addWidget(label)
 
-        self.caution_label = QLabel(CAUTION_TEXT)
-        self.caution_label.setWordWrap(True)
-        self.caution_label.setStyleSheet(
-            "background-color: #c0392b; color: white; border-radius: 20px; "
-            "padding: 14px 28px; font-weight: bold; font-size: 14pt;"
-        )
-        layout.addWidget(self.caution_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addStretch(2)
 
-        layout.addStretch()
+        self.caution_label = MarchingAntsFrame(CAUTION_TEXT)
+        layout.addWidget(self.caution_label)
+
+        layout.addStretch(3)
 
         self.understand_checkbox = QCheckBox("I understand, and want to proceed")
         self.understand_checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)

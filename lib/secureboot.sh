@@ -5,9 +5,9 @@ detect_secureboot_state() {
     local sbctl_status_output="${1-$(sbctl status 2>/dev/null)}"
     if [[ -z "$sbctl_status_output" ]]; then
         printf 'unsupported'
-    elif grep -qE 'Secure Boot:[[:space:]]*Enabled' <<< "$sbctl_status_output"; then
+    elif grep -qE 'Secure Boot:.*Enabled' <<< "$sbctl_status_output"; then
         printf 'enabled'
-    elif grep -qE 'Setup Mode:[[:space:]]*Enabled' <<< "$sbctl_status_output"; then
+    elif grep -qE 'Setup Mode:.*Enabled' <<< "$sbctl_status_output"; then
         printf 'setup_mode'
     else
         printf 'disabled'

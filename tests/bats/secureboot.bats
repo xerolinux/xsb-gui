@@ -25,6 +25,16 @@ setup() {
   [ "$result" = "unsupported" ]
 }
 
+@test "detect_secureboot_state reports enabled with real sbctl checkmark glyphs" {
+  result="$(detect_secureboot_state $'Installed: \xe2\x9c\x93 Sbctl is installed\nSetup Mode: \xe2\x9c\x93 Disabled\nSecure Boot: \xe2\x9c\x93 Enabled')"
+  [ "$result" = "enabled" ]
+}
+
+@test "detect_secureboot_state reports disabled with real sbctl checkmark glyphs" {
+  result="$(detect_secureboot_state $'Installed: \xe2\x9c\x93 Sbctl is installed\nSetup Mode: \xe2\x9c\x97 Disabled\nSecure Boot: \xe2\x9c\x97 Disabled')"
+  [ "$result" = "disabled" ]
+}
+
 @test "in_setup_mode true when Setup Mode is Enabled" {
   run in_setup_mode "Setup Mode: Enabled"
   [ "$status" -eq 0 ]

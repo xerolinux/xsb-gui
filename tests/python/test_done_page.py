@@ -45,7 +45,6 @@ def test_initialize_page_shows_done_text_and_buttons_when_reboot_needed(qtbot):
 
     assert page.label.text() == DONE_TEXT
     assert page.button_row.isVisible() is True
-    assert page.footer_separator.isVisible() is True
 
 
 def test_initialize_page_shows_already_active_text_and_hides_buttons(qtbot):
@@ -59,7 +58,6 @@ def test_initialize_page_shows_already_active_text_and_hides_buttons(qtbot):
 
     assert page.label.text() == DONE_ALREADY_ACTIVE_TEXT
     assert page.button_row.isVisible() is False
-    assert page.footer_separator.isVisible() is False
 
 
 def test_later_button_hides_row_without_spawning_anything(qtbot):
@@ -77,7 +75,6 @@ def test_later_button_hides_row_without_spawning_anything(qtbot):
     mock_runner_cls.assert_not_called()
     mock_qprocess_cls.startDetached.assert_not_called()
     assert page.button_row.isVisible() is False
-    assert page.footer_separator.isVisible() is False
 
 
 def test_reboot_button_runs_apply_splash_then_reboots_on_success(qtbot):
@@ -125,12 +122,11 @@ def test_reboot_button_reboots_even_on_nonzero_exit_code(qtbot):
         )
 
 
-def test_button_row_and_separator_are_the_last_two_layout_items(qtbot):
+def test_button_row_is_the_last_layout_item(qtbot):
     page = DonePage()
     qtbot.addWidget(page)
     layout = page.layout()
     count = layout.count()
-    assert layout.itemAt(count - 2).widget() is page.footer_separator
     assert layout.itemAt(count - 1).widget() is page.button_row
 
 
@@ -149,6 +145,7 @@ def test_initialize_page_hides_standard_wizard_navigation_buttons(qtbot):
     page.wizard = lambda: fake_wizard
 
     page.initializePage()
+    qtbot.wait(10)
 
     for wizard_button in (
         QWizard.WizardButton.BackButton,

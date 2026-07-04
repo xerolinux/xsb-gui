@@ -2,7 +2,6 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from PyQt6.QtGui import QCloseEvent
-from PyQt6.QtWidgets import QApplication
 
 from xsb_gui import app as app_module
 from xsb_gui.app import HELPER_PATH, build_wizard

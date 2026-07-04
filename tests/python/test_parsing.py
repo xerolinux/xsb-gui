@@ -66,6 +66,17 @@ def test_build_summary_text_omits_other_os_line_when_none_found():
     assert "chainload" not in text
 
 
+def test_build_summary_text_omits_other_os_line_when_not_migrating():
+    result = PreflightResult(
+        uefi=True, gpt=True, esp_mountpoint="/boot/efi", bootloader="limine",
+        luks=False, mkinitcpio_hook="none", other_os=["Windows Boot Manager"],
+        secureboot_state="disabled", esp_size_bytes=1073741824,
+    )
+    text = build_summary_text(result, migrating=False)
+    assert "chainload" not in text
+    assert "Windows Boot Manager" not in text
+
+
 def test_format_event_line_uppercases_level():
     line = format_event_line({"event": "migrate_step", "level": "info", "message": "Installing Limine"})
     assert line == "[INFO] Installing Limine"

@@ -25,21 +25,13 @@ class HelperRunner(QObject):
         self._process.start(program, prog_args)
 
     def stop(self):
-        """Terminate the underlying process if it is still running.
+        """Terminate the process: SIGTERM first, SIGKILL if it lingers.
 
-        Sends SIGTERM first and escalates to SIGKILL if the process does
-        not exit within a short grace period. This is a best-effort
-        mitigation, not a guarantee: when launched via pkexec
-        (use_pkexec=True), the QProcess we control IS pkexec itself, not
-        the privileged xsb-helper it spawns under polkit. Qt's QProcess
-        only signals the process it directly started; it does not kill
-        descendants. Terminating/killing pkexec stops the GUI from
-        continuing to track that run, but the already-authorized
-        xsb-helper child may continue running to completion under polkit
-        even after pkexec itself is gone. There is no clean, non-fragile
-        way to also reach that child from here (no shared process group is
-        guaranteed, and pkexec does not forward signals to its child by
-        design).
+        Best-effort only: under pkexec, the QProcess we control is pkexec
+        itself, not the privileged xsb-helper it spawns. Qt can't signal
+        descendants, so the already-authorized xsb-helper child may keep
+        running under polkit even after pkexec is gone - no clean way to
+        reach it from here (no shared process group, no signal forwarding).
         """
         if self._process.state() == QProcess.ProcessState.NotRunning:
             return

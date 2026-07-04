@@ -24,6 +24,7 @@ recovery from a live USB. **Backups are strongly recommended.**
 - Detects UEFI, GPT, and LUKS root (including LVM-on-LUKS), carrying over your **[GRUB](https://git.savannah.gnu.org/cgit/grub.git/)** kernel parameters
 - Every step runs through a single root-privileged helper (`xsb-helper`) via `pkexec`, with visible live progress
 - Refuses to remove **[GRUB](https://git.savannah.gnu.org/cgit/grub.git/)** until **[Limine](https://github.com/limine-bootloader/limine)** is verified working, and refuses to migrate while Secure Boot is already on
+- If **[Limine](https://github.com/limine-bootloader/limine)** is already installed (a prior migration already completed), skips straight to Secure Boot setup instead of refusing - lets you finish or retry Secure Boot enrollment on its own
 
 ## Requirements
 
@@ -39,7 +40,7 @@ sudo pacman -S xsb-gui
 
 ## Usage
 
-Launch from your application launcher ("Limine/SecureBoot Enabler"). The wizard walks you through pre-flight checks, a summary of what will happen, the **[GRUB](https://git.savannah.gnu.org/cgit/grub.git/)**-to-**[Limine](https://github.com/limine-bootloader/limine)** migration itself, and Secure Boot enrollment, in that order.
+Launch from your application launcher ("Limine/SecureBoot Enabler"). The wizard walks you through pre-flight checks, a summary of what will happen, the **[GRUB](https://git.savannah.gnu.org/cgit/grub.git/)**-to-**[Limine](https://github.com/limine-bootloader/limine)** migration itself, and Secure Boot enrollment, in that order. If **[Limine](https://github.com/limine-bootloader/limine)** is already installed, the migration step is skipped and the wizard goes straight to Secure Boot enrollment.
 
 ## License
 

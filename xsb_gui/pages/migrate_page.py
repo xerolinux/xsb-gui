@@ -34,6 +34,10 @@ class _RunnerPage(QWizardPage):
         self._complete = False
         self.retry_button.setVisible(False)
         self.log.clear()
+        # Without this, re-entering the page (e.g. Back then Next) leaves
+        # the Next button stuck enabled from the PRIOR completed run until
+        # some later event happens to emit completeChanged.
+        self.completeChanged.emit()
         self.runner = HelperRunner(helper_path=self._helper_path, use_pkexec=self._use_pkexec)
         self.runner.event_received.connect(self._on_event)
         self.runner.finished.connect(self._on_finished)
@@ -42,17 +46,16 @@ class _RunnerPage(QWizardPage):
         self.runner.start(self._subcommand)
 
     def cleanupPage(self):
-        # Called by QWizard when navigating away from this page (e.g. Back).
-        # Stop any in-flight privileged helper run so it can't keep mutating
-        # the system concurrently with a later re-entry into this page.
+        # QWizard calls this when navigating away (e.g. Back). Stop any
+        # in-flight helper run so it can't keep mutating the system
+        # concurrently with a later re-entry into this page.
         self._stop_runner()
 
     def _stop_runner(self):
-        """Stop the current runner (if any) and detach it from this page.
+        """Stop the current runner (if any), detached from this page.
 
-        Disconnects the old runner's signals first so a delayed
-        finished/error/event emission from the process being torn down
-        can't be mistaken for state from a freshly started run.
+        Disconnects signals first so a delayed emission from the process
+        being torn down isn't mistaken for state from a fresh run.
         """
         if self.runner is None:
             return

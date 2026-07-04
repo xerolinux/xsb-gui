@@ -371,6 +371,7 @@ setup() {
   [[ "$result" == *"/usr/bin/pacman -Rns --noconfirm grub grub-hooks update-grub os-prober"* ]]
   [[ "$result" == *"/usr/bin/rm -rf /boot/grub"* ]]
   [[ "$result" == *"/usr/bin/rm -f /etc/default/grub"* ]]
+  [[ "$result" == *"remove leftover GRUB EFI files"* ]]
   [[ "$result" == *"/usr/bin/efibootmgr -b 0000 -B"* ]]
 }
 
@@ -379,6 +380,75 @@ setup() {
   find_grub_efi_bootnum() { echo ""; }
   result="$(remove_grub)"
   [[ "$result" != *"/usr/bin/efibootmgr -b"* ]]
+}
+
+@test "remove_grub only removes packages that are actually installed (not the full hardcoded candidate list)" {
+  DRY_RUN=0
+  find_grub_efi_bootnum() { echo ""; }
+  run_cmd() { echo "RUN_CMD: $*"; }
+  result="$(remove_grub "$BATS_TEST_TMPDIR/esp" $'grub\ngrub-hooks')"
+  [[ "$result" == *"RUN_CMD: /usr/bin/pacman -Rns --noconfirm grub grub-hooks"* ]]
+  [[ "$result" != *"update-grub"* ]]
+  [[ "$result" != *"os-prober"* ]]
+}
+
+@test "remove_grub skips pacman entirely when none of the candidate packages are installed" {
+  DRY_RUN=0
+  find_grub_efi_bootnum() { echo ""; }
+  run_cmd() { echo "RUN_CMD: $*"; }
+  result="$(remove_grub "$BATS_TEST_TMPDIR/esp" "")"
+  [[ "$result" != *"pacman"* ]]
+  [[ "$result" == *"RUN_CMD: /usr/bin/rm -rf /boot/grub"* ]]
+}
+
+@test "remove_grub returns failure when pacman fails to remove installed GRUB packages" {
+  DRY_RUN=0
+  find_grub_efi_bootnum() { echo ""; }
+  run_cmd() {
+    [[ "$1" == "/usr/bin/pacman" ]] && return 1
+    return 0
+  }
+  run remove_grub "$BATS_TEST_TMPDIR/esp" $'grub\ngrub-hooks'
+  [ "$status" -ne 0 ]
+}
+
+@test "remove_grub_efi_leftovers deletes grub*.efi files under ESP EFI dirs regardless of bootloader-id directory name" {
+  DRY_RUN=0
+  esp="$BATS_TEST_TMPDIR/esp"
+  mkdir -p "$esp/EFI/some-random-bootloader-id" "$esp/EFI/XeroLinux"
+  : > "$esp/EFI/some-random-bootloader-id/grubx64.efi"
+  : > "$esp/EFI/XeroLinux/BOOTX64.EFI"
+  result="$(remove_grub_efi_leftovers "$esp")"
+  [[ "$result" == *"/usr/bin/rm -f $esp/EFI/some-random-bootloader-id/grubx64.efi"* ]]
+  [[ "$result" != *"BOOTX64.EFI"* ]]
+}
+
+@test "remove_grub_efi_leftovers deletes leftover grub.cfg anywhere under the ESP" {
+  DRY_RUN=0
+  esp="$BATS_TEST_TMPDIR/esp2"
+  mkdir -p "$esp/EFI/some-random-bootloader-id"
+  : > "$esp/EFI/some-random-bootloader-id/grub.cfg"
+  result="$(remove_grub_efi_leftovers "$esp")"
+  [[ "$result" == *"/usr/bin/rm -f $esp/EFI/some-random-bootloader-id/grub.cfg"* ]]
+}
+
+@test "remove_grub_efi_leftovers does nothing when the ESP has no GRUB leftovers" {
+  DRY_RUN=0
+  esp="$BATS_TEST_TMPDIR/esp3"
+  mkdir -p "$esp/EFI/XeroLinux"
+  : > "$esp/EFI/XeroLinux/BOOTX64.EFI"
+  result="$(remove_grub_efi_leftovers "$esp")"
+  [ -z "$result" ]
+}
+
+@test "remove_grub_efi_leftovers does not touch the filesystem under DRY_RUN" {
+  DRY_RUN=1
+  esp="$BATS_TEST_TMPDIR/esp4"
+  mkdir -p "$esp/EFI/grub"
+  : > "$esp/EFI/grub/grubx64.efi"
+  result="$(remove_grub_efi_leftovers "$esp")"
+  [[ "$result" == *"would_run"* ]]
+  [ -f "$esp/EFI/grub/grubx64.efi" ]
 }
 
 @test "write_limine_conf appends chainload stanzas to the given path without clobbering it" {
@@ -520,6 +590,27 @@ stub_cmd_migrate_happy_path() {
   [[ "$output" == *"migrate_done"* ]]
 }
 
+@test "cmd_migrate resolves the EFI disk/partition from the REAL discovered ESP mountpoint, not a hardcoded /boot/efi default" {
+  stub_cmd_migrate_happy_path
+  find_esp_mountpoint() { echo "/efi"; return 0; }
+  findmnt() {
+    if [[ "$*" == *"SOURCE /efi"* ]]; then
+      echo "/dev/vdb1"
+      return 0
+    fi
+    echo "root-uuid-1234"
+  }
+  captured_source_file="$BATS_TEST_TMPDIR/captured_esp_source"
+  resolve_esp_disk_and_part() {
+    echo "$1" > "$captured_source_file"
+    echo "/dev/vdb 1"
+  }
+  DRY_RUN=1
+  run cmd_migrate
+  [ "$status" -eq 0 ]
+  [ "$(cat "$captured_source_file")" = "/dev/vdb1" ]
+}
+
 @test "cmd_migrate passes the user's real GRUB_CMDLINE_LINUX_DEFAULT customizations through to the final /etc/default/limine content" {
   stub_cmd_migrate_happy_path
   resolve_grub_extra_params() { echo "quiet loglevel=3 modprobe.blacklist=nouveau"; }
@@ -624,6 +715,17 @@ stub_cmd_migrate_happy_path() {
   [ "$status" -ne 0 ]
   [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
   [[ "$output" == *'"event":"error"'* ]]
+}
+
+@test "cmd_migrate reports a clear error instead of dying silently when remove_grub fails" {
+  stub_cmd_migrate_happy_path
+  remove_grub() { return 1; }
+  DRY_RUN=1
+  run cmd_migrate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"event":"error"'* ]]
+  [[ "$output" == *"Failed to remove GRUB"* ]]
+  [[ "$output" != *"migrate_done"* ]]
 }
 
 @test "cmd_migrate does NOT remove GRUB when verify_limine_conf_has_kernel_entry fails even though the other two checks pass" {

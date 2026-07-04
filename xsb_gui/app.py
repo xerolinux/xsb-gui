@@ -29,20 +29,14 @@ ICON_PATH = Path(__file__).resolve().parent / "assets" / "xsb-gui.png"
 
 
 class _Wizard(QWizard):
-    """QWizard that stops any in-flight privileged helper process before
-    the window is allowed to close, so closing mid-run doesn't leave an
-    orphaned root process with no cleanup.
+    """Stops any in-flight privileged helper process before the window
+    closes, so closing mid-run doesn't leave an orphaned root process.
 
-    Enumerates registered pages generically via pageIds()/page() and
-    duck-types on a "runner" attribute rather than importing specific page
-    classes, so this keeps working if more runner-backed pages are added
-    later.
-
-    DonePage doesn't inherit _RunnerPage (its "Reboot to BIOS" handler is a
-    one-off action, not a full runner-driven page), so it stores its
-    apply-splash HelperRunner under "_splash_runner" instead of "runner".
-    Both attribute names are checked so a splash run in progress also gets
-    stopped when the window closes.
+    Enumerates pages via pageIds()/page() and duck-types on a "runner"
+    attribute instead of importing specific page classes, so this keeps
+    working as more runner-backed pages are added. DonePage isn't a
+    _RunnerPage (its "Reboot to BIOS" handler is a one-off action), so it
+    uses "_splash_runner" instead - both attribute names are checked.
     """
 
     def closeEvent(self, event):

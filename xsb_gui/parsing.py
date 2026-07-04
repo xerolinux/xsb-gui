@@ -29,13 +29,13 @@ def parse_preflight_result(event: dict) -> PreflightResult:
     )
 
 
-def build_summary_text(result: PreflightResult) -> str:
+def build_summary_text(result: PreflightResult, migrating: bool = True) -> str:
     lines = [
         f"EFI system partition: {result.esp_mountpoint}",
         f"Current bootloader: {result.bootloader}",
         f"Encrypted root (LUKS): {'yes' if result.luks else 'no'}",
     ]
-    if result.other_os:
+    if migrating and result.other_os:
         lines.append("Other OS detected, chainload entries will be added: " + ", ".join(result.other_os))
     lines.append(f"Secure Boot firmware state: {result.secureboot_state}")
     return "\n".join(lines)

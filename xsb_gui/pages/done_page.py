@@ -82,10 +82,9 @@ class DonePage(QWizardPage):
         self.reboot_button.setEnabled(True)
         self.later_button.setEnabled(True)
         self.reboot_button.setText("Reboot to BIOS")
-        # QWizard re-runs its own button-layout pass synchronously right
-        # after initializePage() returns, which re-shows Back/Finish/Cancel
-        # and undoes a setVisible(False) called directly here. Defer to the
-        # next event loop iteration so our hide runs after Qt's pass.
+        # QWizard re-shows Back/Finish/Cancel right after initializePage()
+        # returns, undoing a direct setVisible(False) here. Defer to the
+        # next event loop iteration so the hide runs after Qt's own pass.
         QTimer.singleShot(0, self._hide_wizard_buttons)
 
     def _hide_wizard_buttons(self):

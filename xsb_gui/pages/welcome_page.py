@@ -1,4 +1,3 @@
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QCheckBox, QLabel, QSizePolicy, QVBoxLayout, QWizardPage
 
 from xsb_gui.widgets.marching_ants_frame import MarchingAntsFrame

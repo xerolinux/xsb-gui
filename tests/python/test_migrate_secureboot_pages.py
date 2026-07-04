@@ -2,7 +2,7 @@ import os
 from unittest.mock import patch
 
 from PyQt6.QtCore import QProcess
-from PyQt6.QtWidgets import QWizard
+from PyQt6.QtWidgets import QWizard, QWizardPage
 
 from xsb_gui.pages.confirm_page import SECUREBOOT_ERROR_PAGE_ID, SECUREBOOT_PAGE_ID
 from xsb_gui.pages.migrate_page import MigratePage
@@ -288,3 +288,30 @@ def test_migrate_page_survives_malformed_event_line_from_real_process(qtbot):
 
     assert page.isComplete() is True
     assert "Migration to Limine complete." in page.log.toPlainText()
+
+
+def test_next_button_disables_immediately_on_reentry_before_fresh_run_completes(qtbot):
+    # The actual bug this guards against: initializePage() resets state to
+    # incomplete but, without an explicit completeChanged emission, QWizard
+    # never re-evaluates isComplete() until some later event happens to
+    # fire it - leaving the Next button clickable during the reset window
+    # and letting the user proceed to the next page while still incomplete.
+    wizard = QWizard()
+    qtbot.addWidget(wizard)
+    page = MigratePage(helper_path=OK, use_pkexec=False)
+    wizard.setPage(0, page)
+    wizard.setPage(1, QWizardPage())
+    wizard.setStartId(0)
+    wizard.show()
+    wizard.restart()
+    next_button = wizard.button(QWizard.WizardButton.NextButton)
+
+    with qtbot.waitSignal(page.runner.finished, timeout=2000):
+        pass
+    assert next_button.isEnabled() is True
+
+    page._helper_path = SLOW_FIXTURE
+    page.initializePage()
+
+    assert next_button.isEnabled() is False
+    page.runner.stop()

@@ -1,7 +1,7 @@
 # Maintainer: DarkXero <info@xerolinux.xyz>
 pkgname=xsb-gui
-pkgver=0.1.2
-pkgrel=2
+pkgver=0.1.3
+pkgrel=1
 pkgdesc="XeroLinux Limine/SecureBoot Enabler"
 arch=('x86_64')
 url="https://github.com/xerolinux/xsb-gui"
@@ -22,6 +22,11 @@ package() {
     site_packages="$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
     install -d "${pkgdir}${site_packages}/xsb_gui"
     cp -a "${srcdir}/../xsb_gui/." "${pkgdir}${site_packages}/xsb_gui/"
+    # Strip any stray __pycache__ from a local dev tree: bytecode compiled
+    # outside a proper compileall pass at package time isn't tracked by
+    # pacman and can leave stale/untracked files or file conflicts on
+    # upgrade (see Arch bug FS#61329).
+    find "${pkgdir}${site_packages}/xsb_gui" -name '__pycache__' -type d -exec rm -rf {} +
     install -Dm644 "${srcdir}/../xsb-gui.desktop" "${pkgdir}/usr/share/applications/xsb-gui.desktop"
     install -Dm644 "${srcdir}/../xyz.xerolinux.xsb-gui.policy" \
         "${pkgdir}/usr/share/polkit-1/actions/xyz.xerolinux.xsb-gui.policy"

@@ -17,6 +17,11 @@ SECUREBOOT_ALREADY_ENABLED_WARNING = (
     "once Limine is properly signed."
 )
 
+RESUME_AT_SECUREBOOT_NOTICE = (
+    "Limine is already installed and GRUB has been removed. The migration step will "
+    "be skipped - continuing straight to Secure Boot setup."
+)
+
 
 class ConfirmPage(QWizardPage):
     def __init__(self, parent=None):
@@ -29,6 +34,13 @@ class ConfirmPage(QWizardPage):
         self.summary_label = QLabel("")
         self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
+        self.resume_notice_label = QLabel(RESUME_AT_SECUREBOOT_NOTICE)
+        self.resume_notice_label.setWordWrap(True)
+        self.resume_notice_label.setStyleSheet(
+            "background-color: #2980b9; color: white; border-radius: 12px; padding: 12px;"
+        )
+        self.resume_notice_label.setVisible(False)
+        layout.addWidget(self.resume_notice_label)
         self.secureboot_warning_label = QLabel(SECUREBOOT_ALREADY_ENABLED_WARNING)
         self.secureboot_warning_label.setWordWrap(True)
         self.secureboot_warning_label.setStyleSheet(
@@ -38,14 +50,22 @@ class ConfirmPage(QWizardPage):
         layout.addWidget(self.secureboot_warning_label)
         layout.addStretch()
         self._blocked = False
+        self._skip_migrate = False
 
     def initializePage(self):
         preflight_page = self.wizard().page(PREFLIGHT_PAGE_ID)
         result = preflight_page.result
-        self.summary_label.setText(build_summary_text(result))
+        self._skip_migrate = result.bootloader == "limine"
+        self.summary_label.setText(build_summary_text(result, migrating=not self._skip_migrate))
         self._blocked = result.secureboot_state == "enabled"
         self.secureboot_warning_label.setVisible(self._blocked)
+        self.resume_notice_label.setVisible(self._skip_migrate)
         self.completeChanged.emit()
 
     def isComplete(self):
         return not self._blocked
+
+    def nextId(self):
+        if self._skip_migrate:
+            return SECUREBOOT_PAGE_ID
+        return super().nextId()

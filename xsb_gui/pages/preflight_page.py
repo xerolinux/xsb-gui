@@ -25,8 +25,15 @@ class PreflightPage(QWizardPage):
         self.runner = None
 
     def initializePage(self):
+        self._stop_runner()
         self.result = None
         self._esp_too_small = False
+        # Without this, re-entering the page (e.g. Back then Next) leaves
+        # the Next button stuck enabled from the PRIOR completed run until
+        # some later event happens to emit completeChanged - letting the
+        # user click through to ConfirmPage while self.result is still
+        # None, which crashes there.
+        self.completeChanged.emit()
         self.runner = HelperRunner(helper_path=self._helper_path, use_pkexec=self._use_pkexec)
         self.runner.event_received.connect(self._on_event)
         self.runner.finished.connect(self._on_finished)
@@ -34,8 +41,36 @@ class PreflightPage(QWizardPage):
         self.runner.raw_output_received.connect(self._on_raw_output)
         self.runner.start("preflight")
 
+    def cleanupPage(self):
+        # QWizard calls this when navigating away (e.g. Back). Stop any
+        # in-flight helper run so it can't keep running concurrently with
+        # a later re-entry.
+        self._stop_runner()
+
+    def _stop_runner(self):
+        """Stop the current runner (if any), detached from this page.
+
+        Disconnects signals first so a delayed emission from the process
+        being torn down isn't mistaken for state from a fresh run (e.g. a
+        stale preflight_result after Back then Next re-triggers this page).
+        """
+        if self.runner is None:
+            return
+        for signal, slot in (
+            (self.runner.event_received, self._on_event),
+            (self.runner.finished, self._on_finished),
+            (self.runner.error_occurred, self._on_process_error),
+            (self.runner.raw_output_received, self._on_raw_output),
+        ):
+            try:
+                signal.disconnect(slot)
+            except TypeError:
+                pass
+        self.runner.stop()
+
     def _on_event(self, event):
-        if event["event"] == "preflight_result":
+        event_name = event.get("event", "")
+        if event_name == "preflight_result":
             self.result = parse_preflight_result(event)
             if is_esp_too_small(self.result.esp_size_bytes):
                 self._esp_too_small = True
@@ -45,8 +80,8 @@ class PreflightPage(QWizardPage):
                 return
             self._status_label.setText("Checks complete.")
             self.completeChanged.emit()
-        elif event["event"] == "error":
-            self._status_label.setText(event["message"])
+        elif event_name == "error":
+            self._status_label.setText(event.get("message", ""))
             self.completeChanged.emit()
 
     def _on_finished(self, _exit_code):

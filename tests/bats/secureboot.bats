@@ -87,6 +87,19 @@ setup() {
   [[ "$result" == *"/usr/bin/sbctl sign -s $esp/EFI/XeroLinux/BOOTX64.EFI"* ]]
 }
 
+@test "sign_efi_and_kernels returns failure when one file fails to sign even though a later file succeeds" {
+  esp="$BATS_TEST_TMPDIR/efi2"
+  mkdir -p "$esp/EFI/XeroLinux" "$esp/EFI/Boot"
+  touch "$esp/EFI/XeroLinux/BOOTX64.EFI" "$esp/EFI/Boot/BOOTX64.EFI"
+  DRY_RUN=0
+  run_cmd() {
+    [[ "$4" == *"/EFI/XeroLinux/"* ]] && return 1
+    return 0
+  }
+  run sign_efi_and_kernels "$esp"
+  [ "$status" -ne 0 ]
+}
+
 @test "cmd_enable_secureboot refuses when not in setup mode and keys not enrolled" {
   detect_secureboot_state() { echo "disabled"; }
   run cmd_enable_secureboot
@@ -270,7 +283,7 @@ setup() {
 }
 
 @test "cmd_reset_secureboot_keys previews clearing the local key database under DRY_RUN" {
-  in_setup_mode() { return 0; }
+  detect_secureboot_state() { echo "setup_mode"; }
   DRY_RUN=1
   result="$(cmd_reset_secureboot_keys)"
   [[ "$result" == *"would_run"* ]]
@@ -278,7 +291,7 @@ setup() {
 }
 
 @test "cmd_reset_secureboot_keys tells the user to run enable-secureboot when firmware is in Setup Mode" {
-  in_setup_mode() { return 0; }
+  detect_secureboot_state() { echo "setup_mode"; }
   DRY_RUN=1
   run cmd_reset_secureboot_keys
   [ "$status" -eq 0 ]
@@ -287,13 +300,27 @@ setup() {
 }
 
 @test "cmd_reset_secureboot_keys tells the user to clear firmware keys manually when not in Setup Mode" {
-  in_setup_mode() { return 1; }
+  detect_secureboot_state() { echo "disabled"; }
   DRY_RUN=1
   run cmd_reset_secureboot_keys
   [ "$status" -eq 0 ]
   [[ "$output" == *"reset_keys_done"* ]]
   [[ "$output" == *"firmware still has existing keys enrolled"* ]]
   [[ "$output" == *"PK, KEK, db, dbx"* ]]
+}
+
+@test "cmd_reset_secureboot_keys tells the user the state is unknown when sbctl is unavailable, instead of claiming keys are enrolled" {
+  # Real-world case found by running the real xsb-helper on a sandbox with
+  # no sbctl installed: detect_secureboot_state returns "unsupported", not
+  # "keys enrolled" - the old in_setup_mode-only check couldn't tell the
+  # difference and would wrongly claim keys were confirmed enrolled.
+  detect_secureboot_state() { echo "unsupported"; }
+  DRY_RUN=1
+  run cmd_reset_secureboot_keys
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"reset_keys_done"* ]]
+  [[ "$output" == *"Could not determine the firmware's current Secure Boot state"* ]]
+  [[ "$output" != *"firmware still has existing keys enrolled"* ]]
 }
 
 @test "cmd_reset_secureboot_keys emits an explicit error event and stops when clearing local keys fails" {
@@ -303,7 +330,7 @@ setup() {
     fi
     emit_event "would_run" "info" "$*"
   }
-  in_setup_mode() { echo "SHOULD_NOT_BE_CALLED"; return 0; }
+  detect_secureboot_state() { echo "SHOULD_NOT_BE_CALLED"; }
   DRY_RUN=1
   run cmd_reset_secureboot_keys
   [ "$status" -ne 0 ]

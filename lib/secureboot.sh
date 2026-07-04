@@ -44,14 +44,21 @@ choose_enroll_cmd() {
 sign_efi_and_kernels() {
     local esp_dir="$1"
     local efi_file kernel_file
+    # Callers use `sign_efi_and_kernels ... || {...}`, which suspends
+    # errexit for this whole function body (see remove_grub in migrate.sh
+    # for the same quirk). Without tracking failures explicitly, one file
+    # failing to sign would be masked by a later file succeeding, since
+    # the function's exit status would just reflect the last run_cmd call.
+    local any_failed=0
     while IFS= read -r efi_file; do
         [[ -z "$efi_file" ]] && continue
-        run_cmd /usr/bin/sbctl sign -s "$efi_file"
+        run_cmd /usr/bin/sbctl sign -s "$efi_file" || any_failed=1
     done < <(find "$esp_dir" -name '*.efi' -o -iname '*.EFI' 2>/dev/null)
     for kernel_file in /boot/vmlinuz-*; do
         [[ -f "$kernel_file" ]] || continue
-        run_cmd /usr/bin/sbctl sign -s "$kernel_file"
+        run_cmd /usr/bin/sbctl sign -s "$kernel_file" || any_failed=1
     done
+    return "$any_failed"
 }
 
 cmd_enable_secureboot() {
@@ -127,8 +134,17 @@ cmd_reset_secureboot_keys() {
         emit_event "error" "error" "Failed to clear local Secure Boot keys."
         return 1
     }
-    if in_setup_mode; then
+    # detect_secureboot_state (not in_setup_mode) so "keys enrolled" and
+    # "sbctl status genuinely unavailable" get distinguished instead of
+    # both falling into a single "not in setup mode" bucket - the latter
+    # doesn't mean keys are confirmed enrolled, just that sbctl produced no
+    # usable status output at all (missing or broken sbctl install).
+    local state
+    state="$(detect_secureboot_state)"
+    if [[ "$state" == "setup_mode" ]]; then
         emit_event "reset_keys_done" "info" "Local Secure Boot keys cleared. Firmware is in Setup Mode; you can now run enable-secureboot to start fresh."
+    elif [[ "$state" == "unsupported" ]]; then
+        emit_event "reset_keys_done" "info" "Local Secure Boot keys cleared. Could not determine the firmware's current Secure Boot state (sbctl unavailable) - check firmware Setup Mode status directly before running enable-secureboot again."
     else
         emit_event "reset_keys_done" "info" "Local Secure Boot keys cleared, but firmware still has existing keys enrolled. Reboot into UEFI firmware settings and clear all Secure Boot keys (PK, KEK, db, dbx) before running enable-secureboot again."
     fi

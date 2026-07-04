@@ -5,13 +5,14 @@ from PyQt6.QtCore import QProcess
 from PyQt6.QtWidgets import QWizard, QWizardPage
 
 from xsb_gui.pages.confirm_page import (
-    CONFIRM_PAGE_ID, MIGRATE_PAGE_ID, SECUREBOOT_PAGE_ID, ConfirmPage,
+    ALREADY_CONFIGURED_TEXT, CONFIRM_PAGE_ID, MIGRATE_PAGE_ID, SECUREBOOT_PAGE_ID, ConfirmPage,
 )
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 FIXTURE = os.path.join(FIXTURE_DIR, "fake_helper.sh")
 LIMINE_FIXTURE = os.path.join(FIXTURE_DIR, "fake_helper_preflight_limine.sh")
 ERROR_FIXTURE = os.path.join(FIXTURE_DIR, "fake_helper_preflight_error.sh")
+ALREADY_CONFIGURED_FIXTURE = os.path.join(FIXTURE_DIR, "fake_helper_preflight_already_configured.sh")
 RAW_OUTPUT_FIXTURE = os.path.join(FIXTURE_DIR, "fake_helper_raw_output.sh")
 SMALL_ESP_FIXTURE = os.path.join(FIXTURE_DIR, "fake_helper_small_esp.sh")
 SLOW_FIXTURE = os.path.join(FIXTURE_DIR, "fake_helper_slow.sh")
@@ -44,6 +45,20 @@ def test_confirm_page_refuses_and_stays_incomplete_when_preflight_hard_stops(qtb
 
     assert page.isComplete() is False
     assert "not by this tool" in page.summary_label.text()
+
+
+def test_confirm_page_shows_a_positive_status_and_stays_incomplete_when_already_fully_configured(qtbot):
+    page = ConfirmPage(helper_path=ALREADY_CONFIGURED_FIXTURE, use_pkexec=False)
+    qtbot.addWidget(page)
+
+    page.initializePage()
+
+    with qtbot.waitSignal(page.runner.finished, timeout=2000):
+        pass
+
+    assert page.isComplete() is False
+    assert page.summary_label.text() == ALREADY_CONFIGURED_TEXT
+    assert "#27ae60" in page.summary_label.styleSheet()
 
 
 def test_confirm_page_shows_resume_notice_and_skips_migrate_when_limine_already_installed(qtbot):

@@ -261,7 +261,8 @@ setup() {
   sbctl_keys_exist_locally() { return 0; }
   run cmd_preflight
   [ "$status" -ne 0 ]
-  [[ "$output" == *"already enabled and fully configured by this tool"* ]]
+  [[ "$output" == *"preflight_already_configured"* ]]
+  [[ "$output" == *"both enabled and running successfully"* ]]
 }
 
 @test "cmd_preflight refuses when Secure Boot keys are enrolled but not by this tool (idea 1)" {

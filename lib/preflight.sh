@@ -172,7 +172,7 @@ cmd_preflight() {
     # bootloader=="none" were already refused above), so block rather than
     # run through to a redundant re-sign.
     if [[ "$secureboot_state" == "enabled" ]] && keys_enrolled && sbctl_keys_exist_locally; then
-        emit_event "error" "error" "Secure Boot is already enabled and fully configured by this tool. There is nothing further to do here."
+        emit_event "preflight_already_configured" "info" "Limine and Secure Boot are both enabled and running successfully. Nothing needs to be done."
         return 1
     fi
     emit_preflight_result "true" "$gpt" "$esp_mountpoint" "$bootloader" "$luks" \

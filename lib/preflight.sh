@@ -118,16 +118,32 @@ cmd_preflight() {
     emit_event "preflight_step" "info" "Checking EFI system partition"
     local esp_mountpoint
     esp_mountpoint="$(find_esp_mountpoint)" || esp_mountpoint=""
-    local esp_size_bytes="0" esp_free_bytes="0"
-    if [[ -n "$esp_mountpoint" ]]; then
-        esp_size_bytes="$(detect_esp_size_bytes "$esp_mountpoint")" || esp_size_bytes="0"
-        [[ -z "$esp_size_bytes" ]] && esp_size_bytes="0"
-        esp_free_bytes="$(detect_esp_free_bytes "$esp_mountpoint")" || esp_free_bytes="0"
-        [[ -z "$esp_free_bytes" ]] && esp_free_bytes="0"
+    if [[ -z "$esp_mountpoint" ]]; then
+        emit_event "error" "error" "No EFI system partition found. Nothing can be installed without one."
+        return 1
+    fi
+    local esp_size_bytes esp_free_bytes
+    esp_size_bytes="$(detect_esp_size_bytes "$esp_mountpoint")" || esp_size_bytes="0"
+    [[ -z "$esp_size_bytes" ]] && esp_size_bytes="0"
+    esp_free_bytes="$(detect_esp_free_bytes "$esp_mountpoint")" || esp_free_bytes="0"
+    [[ -z "$esp_free_bytes" ]] && esp_free_bytes="0"
+    # Hard floor (64MiB), distinct from parsing.py's softer 256MiB "getting
+    # low" warning that still lets the user proceed: below this there is
+    # genuinely not enough room for Limine plus a kernel/initramfs copy, so
+    # continuing would just fail partway through instead of refusing
+    # cleanly up front. Skipped when esp_free_bytes couldn't be determined
+    # (0) - that's "unknown", not "confirmed too small".
+    if [[ "$esp_free_bytes" -gt 0 ]] && [[ "$esp_free_bytes" -lt 67108864 ]]; then
+        emit_event "error" "error" "The EFI system partition has less than 64MB free. There is not enough room to install Limine and a kernel/initramfs copy."
+        return 1
     fi
     emit_event "preflight_step" "info" "Checking current bootloader"
     local bootloader
     bootloader="$(detect_bootloader)"
+    if [[ "$bootloader" == "none" ]]; then
+        emit_event "error" "error" "Neither GRUB nor Limine is installed. This tool migrates an existing GRUB installation to Limine; there is nothing here to migrate."
+        return 1
+    fi
     emit_event "preflight_step" "info" "Checking for LUKS-encrypted root"
     local luks="false"
     detect_luks_root && luks="true"
@@ -139,6 +155,20 @@ cmd_preflight() {
     emit_event "preflight_step" "info" "Checking Secure Boot firmware state"
     local secureboot_state
     secureboot_state="$(detect_secureboot_state)"
+    if [[ "$secureboot_state" == "enabled" && "$bootloader" == "grub" ]]; then
+        emit_event "error" "error" "Secure Boot is already enabled in firmware. Migrating now would leave an unsigned, unbootable Limine after reboot. Reboot into UEFI firmware settings and disable Secure Boot first - it can be safely re-enabled after migration completes."
+        return 1
+    fi
+    emit_event "preflight_step" "info" "Checking for existing Secure Boot key enrollment"
+    # Hard stop, not just informational: if firmware already has committed
+    # keys (Setup Mode: Disabled, or Secure Boot already on) that this tool
+    # didn't create, nothing downstream can safely sign against them.
+    # Mirrors cmd_enable_secureboot's own refusal, surfaced here instead of
+    # discovered only after migration/signing has already started.
+    if { [[ "$secureboot_state" == "enabled" ]] || keys_enrolled; } && ! sbctl_keys_exist_locally; then
+        emit_event "error" "error" "Secure Boot keys are already enrolled in firmware, but not by this tool. Proceeding could not safely sign anything against an unrelated existing enrollment. Reboot into UEFI firmware settings and clear all Secure Boot keys (PK, KEK, db, dbx) to start fresh, then run this again."
+        return 1
+    fi
     emit_preflight_result "true" "$gpt" "$esp_mountpoint" "$bootloader" "$luks" \
         "$mkinitcpio_hook" "$other_os_json" "$secureboot_state" "$esp_size_bytes" "$esp_free_bytes"
 }

@@ -172,7 +172,14 @@ run_boot_doctor_checks() {
     fi
 
     bootloader="$(detect_bootloader)"
-    efibootmgr_output="$(efibootmgr -v 2>/dev/null)"
+    # `|| true`: efibootmgr_output is a plain reassignment (already
+    # local-declared above), so unlike a combined `local var=$(...)` its
+    # exit status is NOT masked - a real efibootmgr failure (missing
+    # binary, permission issue, firmware quirk) would otherwise abort this
+    # whole diagnostic mid-check when called bare from cmd_doctor (the
+    # other 3 call sites already wrap the outer call in `|| true`, but that
+    # doesn't help a bare top-level entry point).
+    efibootmgr_output="$(efibootmgr -v 2>/dev/null)" || true
 
     entry="$(doctor_check_nvram_entry "$bootloader" "$efibootmgr_output")"
     IFS='|' read -r status message <<< "$entry"

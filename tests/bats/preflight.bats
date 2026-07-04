@@ -160,15 +160,139 @@ setup() {
   is_uefi() { return 0; }
   find_esp_mountpoint() { echo "/boot/efi"; return 0; }
   detect_esp_size_bytes() { echo "1073741824"; }
+  detect_esp_free_bytes() { echo "1073741824"; }
   detect_partition_table() { return 0; }
   detect_bootloader() { echo "grub"; }
   detect_luks_root() { return 1; }
   detect_mkinitcpio_hook_family() { echo "none"; }
   detect_other_os() { echo ""; }
   detect_secureboot_state() { echo "disabled"; }
+  keys_enrolled() { return 1; }
+  sbctl_keys_exist_locally() { return 0; }
   run cmd_preflight
   [ "$status" -eq 0 ]
   [[ "$output" == *'"event":"preflight_result"'* ]]
   [[ "$output" == *'"bootloader":"grub"'* ]]
   [[ "$output" == *'"esp_size_bytes":1073741824'* ]]
+}
+
+@test "cmd_preflight refuses when no EFI system partition is found" {
+  is_uefi() { return 0; }
+  detect_partition_table() { return 0; }
+  find_esp_mountpoint() { return 1; }
+  run cmd_preflight
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"No EFI system partition found"* ]]
+}
+
+@test "cmd_preflight refuses when the ESP has less than 64MB free" {
+  is_uefi() { return 0; }
+  detect_partition_table() { return 0; }
+  find_esp_mountpoint() { echo "/boot/efi"; }
+  detect_esp_size_bytes() { echo "134217728"; }
+  detect_esp_free_bytes() { echo "1048576"; }
+  detect_bootloader() { echo "SHOULD_NOT_BE_CALLED"; }
+  run cmd_preflight
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"less than 64MB free"* ]]
+  [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
+}
+
+@test "cmd_preflight does not refuse on low ESP space when free bytes could not be determined" {
+  is_uefi() { return 0; }
+  detect_partition_table() { return 0; }
+  find_esp_mountpoint() { echo "/boot/efi"; }
+  detect_esp_size_bytes() { echo "0"; }
+  detect_esp_free_bytes() { echo "0"; }
+  detect_bootloader() { echo "grub"; }
+  detect_luks_root() { return 1; }
+  detect_mkinitcpio_hook_family() { echo "none"; }
+  detect_other_os() { echo ""; }
+  detect_secureboot_state() { echo "disabled"; }
+  keys_enrolled() { return 1; }
+  sbctl_keys_exist_locally() { return 0; }
+  run cmd_preflight
+  [ "$status" -eq 0 ]
+}
+
+@test "cmd_preflight refuses when neither GRUB nor Limine is installed" {
+  is_uefi() { return 0; }
+  detect_partition_table() { return 0; }
+  find_esp_mountpoint() { echo "/boot/efi"; }
+  detect_esp_size_bytes() { echo "1073741824"; }
+  detect_esp_free_bytes() { echo "1073741824"; }
+  detect_bootloader() { echo "none"; }
+  run cmd_preflight
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Neither GRUB nor Limine is installed"* ]]
+}
+
+@test "cmd_preflight refuses when Secure Boot is already enabled and GRUB is still the active bootloader" {
+  is_uefi() { return 0; }
+  detect_partition_table() { return 0; }
+  find_esp_mountpoint() { echo "/boot/efi"; }
+  detect_esp_size_bytes() { echo "1073741824"; }
+  detect_esp_free_bytes() { echo "1073741824"; }
+  detect_bootloader() { echo "grub"; }
+  detect_luks_root() { return 1; }
+  detect_mkinitcpio_hook_family() { echo "none"; }
+  detect_other_os() { echo ""; }
+  detect_secureboot_state() { echo "enabled"; }
+  run cmd_preflight
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Secure Boot is already enabled"* ]]
+}
+
+@test "cmd_preflight does NOT refuse when Secure Boot is already enabled and Limine is already the active bootloader" {
+  # Already-migrated, re-signing scenario - a legitimate, normal state that
+  # must not be blocked, unlike the GRUB+enabled combination above.
+  is_uefi() { return 0; }
+  detect_partition_table() { return 0; }
+  find_esp_mountpoint() { echo "/boot/efi"; }
+  detect_esp_size_bytes() { echo "1073741824"; }
+  detect_esp_free_bytes() { echo "1073741824"; }
+  detect_bootloader() { echo "limine"; }
+  detect_luks_root() { return 1; }
+  detect_mkinitcpio_hook_family() { echo "none"; }
+  detect_other_os() { echo ""; }
+  detect_secureboot_state() { echo "enabled"; }
+  keys_enrolled() { return 1; }
+  sbctl_keys_exist_locally() { return 0; }
+  run cmd_preflight
+  [ "$status" -eq 0 ]
+}
+
+@test "cmd_preflight refuses when Secure Boot keys are enrolled but not by this tool (idea 1)" {
+  is_uefi() { return 0; }
+  detect_partition_table() { return 0; }
+  find_esp_mountpoint() { echo "/boot/efi"; }
+  detect_esp_size_bytes() { echo "1073741824"; }
+  detect_esp_free_bytes() { echo "1073741824"; }
+  detect_bootloader() { echo "grub"; }
+  detect_luks_root() { return 1; }
+  detect_mkinitcpio_hook_family() { echo "none"; }
+  detect_other_os() { echo ""; }
+  detect_secureboot_state() { echo "disabled"; }
+  keys_enrolled() { return 0; }
+  sbctl_keys_exist_locally() { return 1; }
+  run cmd_preflight
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Secure Boot keys are already enrolled in firmware, but not by this tool"* ]]
+}
+
+@test "cmd_preflight does NOT refuse on keys enrolled by this tool" {
+  is_uefi() { return 0; }
+  detect_partition_table() { return 0; }
+  find_esp_mountpoint() { echo "/boot/efi"; }
+  detect_esp_size_bytes() { echo "1073741824"; }
+  detect_esp_free_bytes() { echo "1073741824"; }
+  detect_bootloader() { echo "grub"; }
+  detect_luks_root() { return 1; }
+  detect_mkinitcpio_hook_family() { echo "none"; }
+  detect_other_os() { echo ""; }
+  detect_secureboot_state() { echo "disabled"; }
+  keys_enrolled() { return 0; }
+  sbctl_keys_exist_locally() { return 0; }
+  run cmd_preflight
+  [ "$status" -eq 0 ]
 }

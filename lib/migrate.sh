@@ -525,7 +525,18 @@ cmd_cleanup() {
         emit_event "error" "error" "${esp_mountpoint}/limine.conf not found; refusing to prune without it."
         return 1
     fi
-    cleanup_after_migrate "$esp_mountpoint"
+    # `|| true` matters here even though cleanup_after_migrate itself
+    # always returns 0: several of its sub-functions have bare run_cmd
+    # calls that are only safe under suspended errexit (e.g.
+    # cleanup_bootloader_backups' `[[ -e X ]] && run_cmd rm -f X` - run_cmd
+    # is the LAST command in that && chain, so its own failure is NOT
+    # exempt from set -e). cmd_migrate's own call to this same function
+    # already has `|| true` for exactly this reason; this standalone entry
+    # point (the "Clean up ESP" button / `cleanup` subcommand) was missing
+    # it, so a real run_cmd failure here could silently abort the whole
+    # helper process with no error event and no "cleanup_done" - not
+    # boot-breaking (this is space-reclamation only), but a real bug.
+    cleanup_after_migrate "$esp_mountpoint" || true
     emit_event "cleanup_done" "info" "ESP cleanup complete."
 }
 

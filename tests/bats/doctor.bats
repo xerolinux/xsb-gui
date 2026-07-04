@@ -184,3 +184,34 @@ setup() {
   [[ "$output" == *"doctor_check"* ]]
   [[ "$output" == *"doctor_done"* ]]
 }
+
+@test "cmd_doctor does not abort under set -e -o pipefail when efibootmgr fails" {
+  # Regression: efibootmgr_output is a plain (non-local) reassignment
+  # inside run_boot_doctor_checks, so a real efibootmgr failure (missing
+  # binary, permission issue, firmware quirk) was not exempt from set -e
+  # the way a combined `local var=$(...)` would be. cmd_doctor calls
+  # run_boot_doctor_checks bare (unlike migrate/revert/secureboot's own
+  # call sites, which wrap it in `|| true`), so this would have silently
+  # killed the whole diagnostics run mid-check under the real entrypoint's
+  # set -euo pipefail - the opposite of what a diagnostic tool should do.
+  # Sourcing raw functions in bats (without set -e) doesn't exercise this;
+  # it must run under real set -e to prove the fix.
+  run bash -c "
+    set -euo pipefail
+    source '${BATS_TEST_DIRNAME}/../../lib/jsonevent.sh'
+    source '${BATS_TEST_DIRNAME}/../../lib/preflight.sh'
+    source '${BATS_TEST_DIRNAME}/../../lib/chainload.sh'
+    source '${BATS_TEST_DIRNAME}/../../lib/migrate.sh'
+    source '${BATS_TEST_DIRNAME}/../../lib/secureboot.sh'
+    source '${BATS_TEST_DIRNAME}/../../lib/doctor.sh'
+    is_uefi() { return 0; }
+    detect_partition_table() { return 0; }
+    find_esp_mountpoint() { echo /boot/efi; }
+    efibootmgr() { return 1; }
+    detect_secureboot_state() { echo disabled; }
+    cmd_doctor
+    echo DONE_REACHED
+  "
+  [[ "$output" == *"doctor_done"* ]]
+  [[ "$output" == *"DONE_REACHED"* ]]
+}

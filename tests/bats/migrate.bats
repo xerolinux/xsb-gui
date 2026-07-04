@@ -1212,3 +1212,39 @@ stub_cmd_migrate_happy_path() {
   [[ "$output" == *"cleanup_done"* ]]
   [ ! -e "$esp/limine.conf.old" ]
 }
+
+@test "cmd_cleanup does not abort under set -e -o pipefail when a cleanup sub-pass's run_cmd fails (regression: missing || true)" {
+  # Regression: cmd_migrate's own call to cleanup_after_migrate has
+  # `|| true` (needed because several cleanup sub-functions have bare
+  # run_cmd calls only safe under suspended errexit - e.g.
+  # cleanup_bootloader_backups' `[[ -e X ]] && run_cmd rm -f X`, where
+  # run_cmd is the LAST command in that && chain and so is NOT exempt from
+  # set -e on its own). This standalone entry point (the "Clean up ESP"
+  # button / `cleanup` subcommand) was missing it - a real run_cmd failure
+  # here would silently abort the whole helper process under the real
+  # entrypoint's `set -euo pipefail`, with no error event and no
+  # cleanup_done ever emitted. Sourcing raw functions in bats (without
+  # set -e) doesn't exercise this - it must run under real set -e to prove
+  # the fix, matching this file's other set -e regression tests.
+  esp="$BATS_TEST_TMPDIR/esp"
+  mkdir -p "$esp/EFI/limine"
+  printf '    path: boot():/somewhere#h\n' > "$esp/limine.conf"
+  echo old > "$esp/limine.conf.old"
+  run bash -c "
+    set -euo pipefail
+    source '${BATS_TEST_DIRNAME}/../../lib/jsonevent.sh'
+    source '${BATS_TEST_DIRNAME}/../../lib/chainload.sh'
+    source '${BATS_TEST_DIRNAME}/../../lib/migrate.sh'
+    detect_bootloader() { echo limine; }
+    find_esp_mountpoint() { echo '$esp'; }
+    run_cmd() {
+      [[ \"\$*\" == *'limine.conf.old'* ]] && return 1
+      \"\$@\"
+    }
+    cmd_cleanup
+    echo DONE_REACHED
+  "
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cleanup_done"* ]]
+  [[ "$output" == *"DONE_REACHED"* ]]
+}

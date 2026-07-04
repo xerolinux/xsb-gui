@@ -88,9 +88,15 @@ backup_grub_state() {
     run_cmd /usr/bin/rm -rf "$backup_dir" || return 1
     run_cmd /usr/bin/mkdir -p "${backup_dir}/esp-grub" || return 1
 
-    # Config + installed GRUB tree, verbatim (these are what make the restored
-    # boot menu identical to the user's original).
-    [[ -f /etc/default/grub ]] && { run_cmd /usr/bin/cp -a /etc/default/grub "${backup_dir}/etc-default-grub" || return 1; }
+    # Whole /etc/default directory, not just grub's own file: guarantees an
+    # exact revert of everything under it (including files migration
+    # itself adds, like /etc/default/limine, or anything another package
+    # happens to place there), not a selective restore of grub alone.
+    # Deliberate tradeoff: if something else under /etc/default is
+    # legitimately added/changed while migrated, reverting undoes that too
+    # - "revert" here means "put it back exactly as it was before
+    # migrating", not a partial merge.
+    [[ -d /etc/default ]]     && { run_cmd /usr/bin/cp -a /etc/default "${backup_dir}/etc-default" || return 1; }
     [[ -d /etc/grub.d ]]       && { run_cmd /usr/bin/cp -a /etc/grub.d "${backup_dir}/etc-grub.d" || return 1; }
     [[ -d /boot/grub ]]        && { run_cmd /usr/bin/cp -a /boot/grub "${backup_dir}/boot-grub" || return 1; }
 
@@ -129,7 +135,18 @@ reinstall_grub_packages() {
 
 restore_grub_files() {
     local backup_dir="${1-$XSB_BACKUP_DIR}"
-    [[ -f "${backup_dir}/etc-default-grub" ]] && { run_cmd /usr/bin/cp -a "${backup_dir}/etc-default-grub" /etc/default/grub || return 1; }
+    if [[ -d "${backup_dir}/etc-default" ]]; then
+        # Current backup format: whole-directory snapshot. Wipes the live
+        # /etc/default and replaces it wholesale with the exact
+        # pre-migration snapshot (see backup_grub_state's own comment on
+        # why this is a full replace, not a merge).
+        run_cmd /usr/bin/rm -rf /etc/default || return 1
+        run_cmd /usr/bin/cp -a "${backup_dir}/etc-default" /etc/default || return 1
+    elif [[ -f "${backup_dir}/etc-default-grub" ]]; then
+        # Backward compat: a backup made before the whole-directory format
+        # existed only has grub's own config file.
+        run_cmd /usr/bin/cp -a "${backup_dir}/etc-default-grub" /etc/default/grub || return 1
+    fi
     # Saved-default/boot-once state only - grub.cfg itself is NOT restored
     # from backup here. A backed-up grub.cfg reflects whatever
     # kernels/packages existed at migration time, which can be stale by the

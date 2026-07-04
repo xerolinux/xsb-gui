@@ -12,6 +12,7 @@ source "$LIB_DIR/preflight.sh"
 source "$LIB_DIR/chainload.sh"
 source "$LIB_DIR/migrate.sh"
 source "$LIB_DIR/secureboot.sh"
+source "$LIB_DIR/revert.sh"
 
 DRY_RUN=0
 subcommand="${1-}"
@@ -25,6 +26,8 @@ case "$subcommand" in
     preflight) cmd_preflight ;;
     migrate) cmd_migrate ;;
     apply-splash) cmd_apply_splash ;;
+    cleanup) cmd_cleanup ;;
+    revert) cmd_revert ;;
     enable-secureboot) cmd_enable_secureboot ;;
     reset-keys) cmd_reset_secureboot_keys ;;
     status) cmd_status ;;

@@ -92,16 +92,30 @@ setup() {
   [ "$result" = "/usr/bin/sbctl enroll-keys --microsoft --firmware-builtin" ]
 }
 
-@test "sign_efi_and_kernels signs efi files and kernels under DRY_RUN" {
+@test "sign_efi_binaries signs efi files but NOT kernels under DRY_RUN" {
   esp="$BATS_TEST_TMPDIR/efi"
   mkdir -p "$esp/EFI/XeroLinux"
   touch "$esp/EFI/XeroLinux/BOOTX64.EFI"
   DRY_RUN=1
-  result="$(sign_efi_and_kernels "$esp")"
+  result="$(sign_efi_binaries "$esp")"
   [[ "$result" == *"/usr/bin/sbctl sign -s $esp/EFI/XeroLinux/BOOTX64.EFI"* ]]
+  # Limine boots the kernel by hash, not signature: kernels must never be signed.
+  [[ "$result" != *"sign -s /boot/vmlinuz"* ]]
 }
 
-@test "sign_efi_and_kernels returns failure when one file fails to sign even though a later file succeeds" {
+@test "sign_efi_binaries untracks any previously-signed kernel so the sbctl hook stops re-signing it" {
+  esp="$BATS_TEST_TMPDIR/efi_untrack"
+  mkdir -p "$esp/EFI/XeroLinux"
+  touch "$esp/EFI/XeroLinux/BOOTX64.EFI"
+  # Drive the kernel list through a stub so the test is independent of the host.
+  DRY_RUN=1
+  result="$(cd "$BATS_TEST_TMPDIR" && sign_efi_binaries "$esp")"
+  # remove-file is emitted for each installed kernel (host has at least the
+  # running one); assert the command shape rather than a specific kernel name.
+  [[ "$result" == *"sbctl remove-file /boot/vmlinuz"* ]] || skip "no /boot/vmlinuz-* on this host"
+}
+
+@test "sign_efi_binaries returns failure when one file fails to sign even though a later file succeeds" {
   esp="$BATS_TEST_TMPDIR/efi2"
   mkdir -p "$esp/EFI/XeroLinux" "$esp/EFI/Boot"
   touch "$esp/EFI/XeroLinux/BOOTX64.EFI" "$esp/EFI/Boot/BOOTX64.EFI"
@@ -110,7 +124,7 @@ setup() {
     [[ "$4" == *"/EFI/XeroLinux/"* ]] && return 1
     return 0
   }
-  run sign_efi_and_kernels "$esp"
+  run sign_efi_binaries "$esp"
   [ "$status" -ne 0 ]
 }
 
@@ -133,7 +147,7 @@ setup() {
   sbctl_keys_exist_locally() { return 0; }
   choose_enroll_cmd() { echo "sbctl enroll-keys --microsoft"; }
   find_esp_mountpoint() { echo "/boot/efi"; }
-  sign_efi_and_kernels() { emit_event "would_run" "info" "sbctl sign-all"; }
+  sign_efi_binaries() { emit_event "would_run" "info" "sbctl sign-all"; }
   DRY_RUN=1
   run cmd_enable_secureboot
   [ "$status" -eq 0 ]
@@ -146,7 +160,7 @@ setup() {
   detect_secureboot_state() { echo "enabled"; }
   sbctl_keys_exist_locally() { return 0; }
   find_esp_mountpoint() { echo "/boot/efi"; }
-  sign_efi_and_kernels() { emit_event "would_run" "info" "sbctl sign-all"; }
+  sign_efi_binaries() { emit_event "would_run" "info" "sbctl sign-all"; }
   DRY_RUN=1
   run cmd_enable_secureboot
   [ "$status" -eq 0 ]
@@ -159,7 +173,7 @@ setup() {
   detect_secureboot_state() { echo "enabled"; }
   sbctl_keys_exist_locally() { return 1; }
   find_esp_mountpoint() { echo "/boot/efi"; }
-  sign_efi_and_kernels() { echo "SHOULD_NOT_BE_CALLED"; }
+  sign_efi_binaries() { echo "SHOULD_NOT_BE_CALLED"; }
   DRY_RUN=1
   run cmd_enable_secureboot
   [ "$status" -ne 0 ]
@@ -174,7 +188,7 @@ setup() {
   in_setup_mode() { return 0; }
   sbctl_keys_exist_locally() { return 1; }
   find_esp_mountpoint() { echo "/boot/efi"; }
-  sign_efi_and_kernels() { echo "SHOULD_NOT_BE_CALLED"; }
+  sign_efi_binaries() { echo "SHOULD_NOT_BE_CALLED"; }
   DRY_RUN=1
   run cmd_enable_secureboot
   [ "$status" -ne 0 ]
@@ -189,7 +203,7 @@ setup() {
   in_setup_mode() { return 0; }
   choose_enroll_cmd() { echo "sbctl enroll-keys --microsoft"; }
   find_esp_mountpoint() { echo "/boot/efi"; }
-  sign_efi_and_kernels() { emit_event "would_run" "info" "sbctl sign-all"; }
+  sign_efi_binaries() { emit_event "would_run" "info" "sbctl sign-all"; }
   DRY_RUN=1
   run cmd_enable_secureboot
   [ "$status" -eq 0 ]
@@ -209,7 +223,7 @@ setup() {
     in_setup_mode() { return 0; }
     choose_enroll_cmd() { echo 'sbctl enroll-keys --microsoft'; }
     find_esp_mountpoint() { echo '/boot/efi'; }
-    sign_efi_and_kernels() { emit_event 'would_run' 'info' 'sbctl sign-all'; }
+    sign_efi_binaries() { emit_event 'would_run' 'info' 'sbctl sign-all'; }
     DRY_RUN=1
     cmd_enable_secureboot
     echo 'REACHED_END'
@@ -231,7 +245,7 @@ setup() {
   }
   choose_enroll_cmd() { echo "SHOULD_NOT_BE_CALLED"; }
   find_esp_mountpoint() { echo "/boot/efi"; }
-  sign_efi_and_kernels() { echo "SHOULD_NOT_BE_CALLED"; }
+  sign_efi_binaries() { echo "SHOULD_NOT_BE_CALLED"; }
   DRY_RUN=1
   run cmd_enable_secureboot
   [ "$status" -ne 0 ]
@@ -252,7 +266,7 @@ setup() {
     emit_event "would_run" "info" "$*"
   }
   find_esp_mountpoint() { echo "/boot/efi"; }
-  sign_efi_and_kernels() { echo "SHOULD_NOT_BE_CALLED"; }
+  sign_efi_binaries() { echo "SHOULD_NOT_BE_CALLED"; }
   DRY_RUN=1
   run cmd_enable_secureboot
   [ "$status" -ne 0 ]
@@ -267,7 +281,7 @@ setup() {
   in_setup_mode() { return 0; }
   choose_enroll_cmd() { echo "sbctl enroll-keys --microsoft"; }
   find_esp_mountpoint() { echo "/boot/efi"; }
-  sign_efi_and_kernels() { return 1; }
+  sign_efi_binaries() { return 1; }
   DRY_RUN=1
   run cmd_enable_secureboot
   [ "$status" -ne 0 ]
@@ -279,7 +293,7 @@ setup() {
   detect_secureboot_state() { echo "enabled"; }
   sbctl_keys_exist_locally() { return 0; }
   find_esp_mountpoint() { echo "/boot/efi"; }
-  sign_efi_and_kernels() { return 1; }
+  sign_efi_binaries() { return 1; }
   DRY_RUN=1
   run cmd_enable_secureboot
   [ "$status" -ne 0 ]
@@ -293,7 +307,7 @@ setup() {
   in_setup_mode() { return 0; }
   sbctl_keys_exist_locally() { return 0; }
   find_esp_mountpoint() { echo "/boot/efi"; }
-  sign_efi_and_kernels() { return 1; }
+  sign_efi_binaries() { return 1; }
   DRY_RUN=1
   run cmd_enable_secureboot
   [ "$status" -ne 0 ]
@@ -444,7 +458,7 @@ setup() {
 @test "cmd_enable_secureboot calls configure_fwupd_secureboot after successfully (re-)signing, on all three success paths" {
   find_esp_mountpoint() { echo "/boot/efi"; }
   choose_enroll_cmd() { echo "sbctl enroll-keys --microsoft"; }
-  sign_efi_and_kernels() { emit_event "would_run" "info" "sbctl sign-all"; }
+  sign_efi_binaries() { emit_event "would_run" "info" "sbctl sign-all"; }
   configure_fwupd_secureboot() { emit_event "would_run" "info" "configure_fwupd_secureboot called"; }
   DRY_RUN=1
 

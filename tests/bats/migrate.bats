@@ -1046,3 +1046,77 @@ stub_cmd_migrate_happy_path() {
   [[ "$output" == *"Cleaning up leftover boot files"* ]]
   [ ! -e "$esp/limine.conf.old" ]
 }
+
+@test "cleanup_orphaned_esp_ukis removes an unreferenced UKI and keeps referenced ones" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  mkdir -p "$esp/EFI/Linux"
+  : > "$esp/EFI/Linux/arch_6.0.efi"
+  : > "$esp/EFI/Linux/arch_5.0-orphan.efi"
+  printf '    path: boot():/EFI/Linux/arch_6.0.efi#h\n' > "$esp/limine.conf"
+  run cleanup_orphaned_esp_ukis "$esp"
+  [ "$status" -eq 0 ]
+  [ -f "$esp/EFI/Linux/arch_6.0.efi" ]
+  [ ! -e "$esp/EFI/Linux/arch_5.0-orphan.efi" ]
+}
+
+@test "cleanup_orphaned_esp_ukis SAFETY: deletes nothing when limine.conf references no EFI/Linux UKI" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  mkdir -p "$esp/EFI/Linux"
+  : > "$esp/EFI/Linux/arch_6.0.efi"
+  printf '    path: boot():/somewhere/vmlinuz-linux#h\n' > "$esp/limine.conf"
+  run cleanup_orphaned_esp_ukis "$esp"
+  [ "$status" -eq 0 ]
+  [ -f "$esp/EFI/Linux/arch_6.0.efi" ]
+  [[ "$output" == *"Skipping UKI prune"* ]]
+}
+
+@test "cleanup_orphaned_esp_ukis is a no-op when there is no EFI/Linux dir" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  mkdir -p "$esp"
+  printf '    path: boot():/EFI/Linux/x.efi#h\n' > "$esp/limine.conf"
+  run cleanup_orphaned_esp_ukis "$esp"
+  [ "$status" -eq 0 ]
+}
+
+@test "cleanup_orphaned_esp_ukis previews without deleting under DRY_RUN" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  mkdir -p "$esp/EFI/Linux"
+  : > "$esp/EFI/Linux/arch_6.0.efi"
+  : > "$esp/EFI/Linux/orphan.efi"
+  printf '    path: boot():/EFI/Linux/arch_6.0.efi#h\n' > "$esp/limine.conf"
+  DRY_RUN=1
+  run cleanup_orphaned_esp_ukis "$esp"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rm -f $esp/EFI/Linux/orphan.efi"* ]]
+  [ -f "$esp/EFI/Linux/orphan.efi" ]
+}
+
+@test "cmd_cleanup refuses when Limine is not the active bootloader" {
+  detect_bootloader() { echo "grub"; }
+  run cmd_cleanup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Limine is not the active bootloader"* ]]
+}
+
+@test "cmd_cleanup refuses when limine.conf is missing" {
+  detect_bootloader() { echo "limine"; }
+  find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR/esp"; }
+  mkdir -p "$BATS_TEST_TMPDIR/esp"
+  run cmd_cleanup
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"limine.conf not found"* ]]
+}
+
+@test "cmd_cleanup runs the cleanup passes and emits cleanup_done when Limine is active" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  detect_bootloader() { echo "limine"; }
+  find_esp_mountpoint() { echo "$esp"; }
+  mkdir -p "$esp/EFI/limine"
+  printf '    path: boot():/somewhere#h\n' > "$esp/limine.conf"
+  echo old > "$esp/limine.conf.old"
+  run cmd_cleanup
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Cleaning up leftover boot files"* ]]
+  [[ "$output" == *"cleanup_done"* ]]
+  [ ! -e "$esp/limine.conf.old" ]
+}

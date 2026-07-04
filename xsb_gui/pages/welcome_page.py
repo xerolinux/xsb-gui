@@ -1,8 +1,12 @@
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QCheckBox, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWizardPage
+from PyQt6.QtWidgets import (
+    QCheckBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWizardPage,
+)
 
 from xsb_gui.widgets.marching_ants_frame import MarchingAntsFrame
 from xsb_gui.widgets.secureboot_status_dialog import SecureBootStatusDialog
+from xsb_gui.widgets.cleanup_dialog import CleanupDialog
+from xsb_gui.widgets.revert_dialog import RevertDialog
 
 CAUTION_TEXT = (
     '<p align="center">⚠ USE AT YOUR OWN RISK ⚠</p>'
@@ -46,14 +50,37 @@ class WelcomePage(QWizardPage):
         self.caution_label = MarchingAntsFrame(CAUTION_TEXT)
         layout.addWidget(self.caution_label)
 
-        layout.addSpacing(10)
+        # Equal stretch above and below the troubleshooting group centres it in
+        # the space between the caution pill and the checkbox.
+        layout.addStretch(2)
 
+        self.troubleshooting_title = QLabel("<b>Troubleshooting</b>")
+        self.troubleshooting_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self.troubleshooting_title)
+
+        layout.addSpacing(8)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(28)
+        button_row.addStretch(1)
         self.check_status_button = QPushButton("Check SecureBoot Status")
-        self.check_status_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.check_status_button.clicked.connect(self._on_check_status_clicked)
-        layout.addWidget(self.check_status_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.cleanup_button = QPushButton("Clean up ESP")
+        self.cleanup_button.clicked.connect(self._on_cleanup_clicked)
+        self.revert_button = QPushButton("Revert to GRUB")
+        self.revert_button.clicked.connect(self._on_revert_clicked)
+        # Give every button the same fixed width (the widest one's natural
+        # width, so no label is truncated) for a uniform, evenly-spaced row.
+        self._utility_buttons = (self.check_status_button, self.cleanup_button, self.revert_button)
+        uniform_width = max(b.sizeHint().width() for b in self._utility_buttons)
+        for button in self._utility_buttons:
+            button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            button.setFixedWidth(uniform_width)
+            button_row.addWidget(button)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
 
-        layout.addStretch(3)
+        layout.addStretch(2)
 
         self.understand_checkbox = QCheckBox("I understand, and want to proceed")
         self.understand_checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -62,6 +89,14 @@ class WelcomePage(QWizardPage):
 
     def _on_check_status_clicked(self):
         dialog = SecureBootStatusDialog(self._helper_path, self._use_pkexec, self)
+        dialog.exec()
+
+    def _on_cleanup_clicked(self):
+        dialog = CleanupDialog(self._helper_path, self._use_pkexec, self)
+        dialog.exec()
+
+    def _on_revert_clicked(self):
+        dialog = RevertDialog(self._helper_path, self._use_pkexec, self)
         dialog.exec()
 
     def isComplete(self):

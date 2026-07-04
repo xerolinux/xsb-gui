@@ -28,6 +28,15 @@ detect_esp_size_bytes() {
     lsblk -bdno SIZE "$esp_source" 2>/dev/null
 }
 
+# Free (available) bytes on the ESP filesystem, from the live mount. Used to
+# warn about a filling ESP - a softer, actionable signal than the hard total
+# size floor, since space is what actually runs out as kernels accumulate.
+detect_esp_free_bytes() {
+    local esp_mountpoint="${1:-}"
+    [[ -z "$esp_mountpoint" ]] && return 1
+    df -B1 --output=avail "$esp_mountpoint" 2>/dev/null | tail -1 | tr -d '[:space:]'
+}
+
 detect_partition_table() {
     local pttype_output="${1:-}"
     if [[ -z "$pttype_output" ]]; then
@@ -86,11 +95,12 @@ build_json_string_array() {
 
 emit_preflight_result() {
     local uefi="$1" gpt="$2" esp_mountpoint="$3" bootloader="$4" luks="$5" \
-          mkinitcpio_hook="$6" other_os_json="$7" secureboot_state="$8" esp_size_bytes="${9:-0}"
-    printf '{"event":"preflight_result","level":"info","data":{"uefi":%s,"gpt":%s,"esp_mountpoint":"%s","bootloader":"%s","luks":%s,"mkinitcpio_hook":"%s","other_os":%s,"secureboot_state":"%s","esp_size_bytes":%s}}\n' \
+          mkinitcpio_hook="$6" other_os_json="$7" secureboot_state="$8" esp_size_bytes="${9:-0}" \
+          esp_free_bytes="${10:-0}"
+    printf '{"event":"preflight_result","level":"info","data":{"uefi":%s,"gpt":%s,"esp_mountpoint":"%s","bootloader":"%s","luks":%s,"mkinitcpio_hook":"%s","other_os":%s,"secureboot_state":"%s","esp_size_bytes":%s,"esp_free_bytes":%s}}\n' \
         "$uefi" "$gpt" "$(json_escape "$esp_mountpoint")" "$(json_escape "$bootloader")" \
         "$luks" "$(json_escape "$mkinitcpio_hook")" "$other_os_json" "$(json_escape "$secureboot_state")" \
-        "$esp_size_bytes"
+        "$esp_size_bytes" "$esp_free_bytes"
 }
 
 cmd_preflight() {
@@ -101,10 +111,12 @@ cmd_preflight() {
     emit_event "preflight_step" "info" "Checking EFI system partition"
     local esp_mountpoint
     esp_mountpoint="$(find_esp_mountpoint)" || esp_mountpoint=""
-    local esp_size_bytes="0"
+    local esp_size_bytes="0" esp_free_bytes="0"
     if [[ -n "$esp_mountpoint" ]]; then
         esp_size_bytes="$(detect_esp_size_bytes "$esp_mountpoint")" || esp_size_bytes="0"
         [[ -z "$esp_size_bytes" ]] && esp_size_bytes="0"
+        esp_free_bytes="$(detect_esp_free_bytes "$esp_mountpoint")" || esp_free_bytes="0"
+        [[ -z "$esp_free_bytes" ]] && esp_free_bytes="0"
     fi
     emit_event "preflight_step" "info" "Checking partition table type"
     local gpt="false"
@@ -124,7 +136,7 @@ cmd_preflight() {
     local secureboot_state
     secureboot_state="$(detect_secureboot_state)"
     emit_preflight_result "true" "$gpt" "$esp_mountpoint" "$bootloader" "$luks" \
-        "$mkinitcpio_hook" "$other_os_json" "$secureboot_state" "$esp_size_bytes"
+        "$mkinitcpio_hook" "$other_os_json" "$secureboot_state" "$esp_size_bytes" "$esp_free_bytes"
 }
 
 cmd_status() {

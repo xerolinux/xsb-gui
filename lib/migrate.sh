@@ -325,7 +325,7 @@ cleanup_orphaned_esp_kernels() {
     done < <(grep -E '(module_)?path:[[:space:]]*boot\(\):' "$limine_conf" 2>/dev/null)
 
     if [[ "${#referenced[@]}" -eq 0 ]]; then
-        emit_event "migrate_step" "info" "Skipping ESP kernel prune: no referenced kernels found in ${limine_conf}."
+        emit_event "cleanup_step" "info" "Skipping ESP kernel prune: no referenced kernels found in ${limine_conf}."
         return 0
     fi
 
@@ -391,13 +391,84 @@ cleanup_old_bootloader_leftovers() {
     done
 }
 
+# Prune Unified Kernel Images (EFI/Linux/*.efi) the bootloader no longer
+# references. Only relevant when ENABLE_UKI=yes in limine-entry-tool, which
+# leaves stale UKIs behind on kernel removal or a CUSTOM_UKI_NAME change (the
+# config explicitly warns they must be removed manually to free ESP space).
+#
+# SAFETY: UKIs can be booted straight from a limine.conf entry OR directly by a
+# firmware boot entry. We only delete a UKI that limine.conf does NOT reference,
+# and ONLY when limine.conf references at least one UKI under EFI/Linux (proving
+# limine actually manages UKIs there). If nothing references an EFI/Linux UKI,
+# the boot scheme is unknown (e.g. direct EFI-stub boot), so we delete nothing
+# and say so - never risk removing a booted image to reclaim a few MB.
+cleanup_orphaned_esp_ukis() {
+    local esp_mountpoint="${1-/boot/efi}"
+    local limine_conf="${2-${esp_mountpoint}/limine.conf}"
+    local uki_dir="${esp_mountpoint}/EFI/Linux"
+
+    [[ -d "$uki_dir" ]] || return 0
+    [[ -f "$limine_conf" ]] || return 0
+
+    local -a referenced=()
+    local line p
+    while IFS= read -r line; do
+        p="${line#*boot():}"
+        p="${p%%#*}"
+        p="${p#"${p%%[![:space:]]*}"}"
+        p="${p%"${p##*[![:space:]]}"}"
+        [[ "$p" == /EFI/Linux/*.efi ]] && referenced+=("$p")
+    done < <(grep -iE '(module_)?path:[[:space:]]*boot\(\):.*/EFI/Linux/.*\.efi' "$limine_conf" 2>/dev/null)
+
+    if [[ "${#referenced[@]}" -eq 0 ]]; then
+        emit_event "cleanup_step" "info" "Skipping UKI prune: limine.conf references no EFI/Linux UKI (unknown boot scheme), leaving them untouched."
+        return 0
+    fi
+
+    local ukifile relpath ref is_referenced
+    while IFS= read -r ukifile; do
+        [[ -n "$ukifile" ]] || continue
+        relpath="${ukifile#"$esp_mountpoint"}"
+        is_referenced=0
+        for ref in "${referenced[@]}"; do
+            [[ "$ref" == "$relpath" ]] && { is_referenced=1; break; }
+        done
+        [[ "$is_referenced" == "1" ]] && continue
+        run_cmd /usr/bin/rm -f "$ukifile"
+    done < <(find "$uki_dir" -maxdepth 1 -type f -iname '*.efi' 2>/dev/null)
+}
+
 cleanup_after_migrate() {
     local esp_mountpoint="${1-/boot/efi}"
-    emit_event "migrate_step" "info" "Cleaning up leftover boot files"
+    emit_event "cleanup_step" "info" "Cleaning up leftover boot files"
     cleanup_orphaned_esp_kernels "$esp_mountpoint"
+    cleanup_orphaned_esp_ukis "$esp_mountpoint"
     cleanup_bootloader_backups "$esp_mountpoint"
     cleanup_old_bootloader_leftovers "$esp_mountpoint"
     return 0
+}
+
+# Standalone, re-runnable ESP cleanup: same passes as the post-migration hook,
+# but invocable any time to reclaim ESP space on an existing Limine install.
+cmd_cleanup() {
+    if [[ "$(detect_bootloader)" != "limine" ]]; then
+        emit_event "error" "error" "Limine is not the active bootloader; nothing to clean up."
+        return 1
+    fi
+    local esp_mountpoint
+    esp_mountpoint="$(find_esp_mountpoint)" || {
+        emit_event "error" "error" "No EFI system partition found."
+        return 1
+    }
+    # Refuse without limine.conf: the orphan-kernel prune uses it as the
+    # authoritative list of what Limine boots. Without it we can't tell a
+    # live kernel from an orphan, so we must not delete anything.
+    if [[ ! -f "${esp_mountpoint}/limine.conf" ]]; then
+        emit_event "error" "error" "${esp_mountpoint}/limine.conf not found; refusing to prune without it."
+        return 1
+    fi
+    cleanup_after_migrate "$esp_mountpoint"
+    emit_event "cleanup_done" "info" "ESP cleanup complete."
 }
 
 write_limine_conf() {
@@ -433,6 +504,13 @@ cmd_migrate() {
         emit_event "error" "error" "No EFI system partition found. Aborting before any changes."
         return 1
     }
+
+    # Safety net: capture everything needed to revert to GRUB, before touching
+    # anything. Best-effort - a backup failure must not block the migration the
+    # user asked for; it only means the revert option won't be available.
+    emit_event "migrate_step" "info" "Backing up current GRUB configuration"
+    backup_grub_state "$esp_mountpoint" || \
+        emit_event "migrate_step" "info" "Could not back up GRUB configuration; revert-to-GRUB will not be available, but migration will continue."
 
     emit_event "migrate_step" "info" "Installing Limine and limine-mkinitcpio-hook"
     install_limine_packages || {

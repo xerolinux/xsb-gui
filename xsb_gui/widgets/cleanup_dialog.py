@@ -1,0 +1,108 @@
+from PyQt6.QtWidgets import (
+    QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout,
+)
+
+from xsb_gui.helper_runner import HelperRunner
+from xsb_gui.parsing import format_event_line
+
+CHECKING_TEXT = "Checking for leftover boot files..."
+PREVIEW_TEXT = "These leftover boot files would be removed. Nothing has been deleted yet - press Apply to remove them."
+NOTHING_TEXT = "Nothing to clean up - your EFI partition is already tidy."
+APPLYING_TEXT = "Removing leftover boot files..."
+DONE_TEXT = "Cleanup complete."
+FAILED_TEXT = "Cleanup did not complete."
+
+
+class CleanupDialog(QDialog):
+    """Reclaim ESP space by pruning leftover boot files (orphaned kernels/UKIs,
+    stale bootloader backups, old-bootloader leftovers).
+
+    Runs xsb-helper's "cleanup --dry-run" first so the user sees exactly what
+    would be removed, and only deletes anything after an explicit Apply - the
+    operation removes files, so no surprise deletions.
+    """
+
+    def __init__(self, helper_path, use_pkexec, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Clean up ESP")
+        self.setModal(True)
+        self.setMinimumSize(540, 380)
+        self._helper_path = helper_path
+        self._use_pkexec = use_pkexec
+        self._applying = False
+        self._errored = False
+        self._would_remove = 0
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
+
+        self.status_label = QLabel(CHECKING_TEXT)
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        layout.addWidget(self.log)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self.apply_button = QPushButton("Apply Cleanup")
+        self.apply_button.setEnabled(False)
+        self.apply_button.clicked.connect(self._on_apply_clicked)
+        buttons.addWidget(self.apply_button)
+        self.close_button = QPushButton("Close")
+        self.close_button.clicked.connect(self.accept)
+        buttons.addWidget(self.close_button)
+        layout.addLayout(buttons)
+
+        self._runner = None
+        self._start("cleanup", "--dry-run")
+
+    def _start(self, *args):
+        self._runner = HelperRunner(helper_path=self._helper_path, use_pkexec=self._use_pkexec)
+        self._runner.event_received.connect(self._on_event)
+        self._runner.error_occurred.connect(self._on_error)
+        self._runner.finished.connect(self._on_finished)
+        self._runner.start(*args)
+
+    def _on_event(self, event):
+        name = event.get("event", "")
+        if name == "would_run":
+            self._would_remove += 1
+        elif name == "error":
+            self._errored = True
+            self.status_label.setText(event.get("message", "Cleanup could not run."))
+        self.log.appendPlainText(format_event_line(event))
+
+    def _on_error(self, message):
+        self._errored = True
+        self.status_label.setText(f"Could not run cleanup: {message}")
+
+    def _on_finished(self, exit_code):
+        if self._errored:
+            return
+        if self._applying:
+            self.status_label.setText(DONE_TEXT if exit_code == 0 else FAILED_TEXT)
+            self.apply_button.setEnabled(False)
+            return
+        # Dry-run finished.
+        if exit_code != 0:
+            self.status_label.setText(FAILED_TEXT)
+        elif self._would_remove > 0:
+            self.status_label.setText(PREVIEW_TEXT)
+            self.apply_button.setEnabled(True)
+        else:
+            self.status_label.setText(NOTHING_TEXT)
+
+    def _on_apply_clicked(self):
+        self._applying = True
+        self.apply_button.setEnabled(False)
+        self.status_label.setText(APPLYING_TEXT)
+        self.log.appendPlainText("")
+        self._start("cleanup")
+
+    def done(self, result):
+        if self._runner is not None:
+            self._runner.stop()
+        super().done(result)

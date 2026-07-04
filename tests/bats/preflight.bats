@@ -103,6 +103,27 @@ setup() {
   echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['data']['esp_size_bytes']==0"
 }
 
+@test "emit_preflight_result includes esp_free_bytes when provided" {
+  result="$(emit_preflight_result true true "/boot/efi" "limine" false "none" '[]' "enabled" "2147483648" "1073741824")"
+  echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['data']['esp_free_bytes']==1073741824; assert d['data']['esp_size_bytes']==2147483648"
+}
+
+@test "emit_preflight_result defaults esp_free_bytes to 0 when omitted" {
+  result="$(emit_preflight_result true true "/boot/efi" "grub" false "none" '[]' "disabled" "1073741824")"
+  echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['data']['esp_free_bytes']==0"
+}
+
+@test "detect_esp_free_bytes returns failure when no mountpoint given" {
+  run detect_esp_free_bytes ""
+  [ "$status" -eq 1 ]
+}
+
+@test "detect_esp_free_bytes returns a positive integer for a real path" {
+  result="$(detect_esp_free_bytes "$BATS_TEST_TMPDIR")"
+  [[ "$result" =~ ^[0-9]+$ ]]
+  [ "$result" -gt 0 ]
+}
+
 @test "detect_esp_size_bytes returns failure when no mountpoint given" {
   run detect_esp_size_bytes ""
   [ "$status" -eq 1 ]

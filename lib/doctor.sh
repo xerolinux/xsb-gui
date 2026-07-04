@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Boot Doctor: read-only, non-destructive consistency checks. Safe to run any
+# Boot Doctor: read-only, non-destructive consistency checks. Safe any
 # time regardless of DRY_RUN - nothing here mutates anything. Each
-# doctor_check_* function returns "status|message" (status one of ok/warning/
-# error) so cmd_doctor and run_boot_doctor_checks can emit and aggregate them
-# uniformly. Designed to catch the exact class of bug behind a real incident:
-# a stale fallback bootloader binary silently taking priority over a
-# correctly-registered NVRAM entry, discovered only after a failed boot.
+# doctor_check_* returns "status|message" (ok/warning/error) so
+# cmd_doctor and run_boot_doctor_checks can emit/aggregate uniformly.
 
 doctor_check_uefi() {
     if is_uefi "${1-}"; then
@@ -34,9 +31,9 @@ doctor_check_esp_present() {
     fi
 }
 
-# Whether the active bootloader has a working NVRAM boot entry. GRUB's own
-# entry isn't managed/verified by this tool outside of revert, so its
-# presence there is only ever informational, never a failure on its own.
+# Whether the active bootloader has a working NVRAM boot entry. GRUB
+# itself isn't managed by this tool, so its presence is only ever
+# informational, never a failure on its own.
 doctor_check_nvram_entry() {
     local bootloader="$1" efibootmgr_output="$2"
     case "$bootloader" in
@@ -82,13 +79,11 @@ doctor_check_kernel_entry() {
     fi
 }
 
-# The exact failure pattern behind a real incident: migration writes the
-# active bootloader's binary to the generic UEFI fallback path
-# (EFI/Boot/BOOTX64.EFI) so firmware can find it even without a working
-# NVRAM entry. If that file drifts from whatever bootloader is ACTUALLY
-# active (e.g. a stale copy left behind by an incomplete revert), firmware
-# that ever falls back to it boots the wrong thing - with no other symptom
-# until the next reboot.
+# Migration writes the active bootloader's binary to the generic UEFI
+# fallback path (EFI/Boot/BOOTX64.EFI) so firmware can find it without a
+# working NVRAM entry. If that file drifts from whatever bootloader is
+# ACTUALLY active, firmware falling back to it boots the wrong thing -
+# with no symptom until the next reboot.
 doctor_check_fallback_path() {
     local esp_mountpoint="$1" bootloader="$2"
     local fallback="${esp_mountpoint}/EFI/Boot/BOOTX64.EFI"
@@ -172,13 +167,9 @@ run_boot_doctor_checks() {
     fi
 
     bootloader="$(detect_bootloader)"
-    # `|| true`: efibootmgr_output is a plain reassignment (already
-    # local-declared above), so unlike a combined `local var=$(...)` its
-    # exit status is NOT masked - a real efibootmgr failure (missing
-    # binary, permission issue, firmware quirk) would otherwise abort this
-    # whole diagnostic mid-check when called bare from cmd_doctor (the
-    # other 3 call sites already wrap the outer call in `|| true`, but that
-    # doesn't help a bare top-level entry point).
+    # `|| true`: plain reassignment to an already-local var doesn't mask
+    # its exit status like a combined `local var=$(...)` would - without
+    # this, a real efibootmgr failure would abort the whole diagnostic.
     efibootmgr_output="$(efibootmgr -v 2>/dev/null)" || true
 
     entry="$(doctor_check_nvram_entry "$bootloader" "$efibootmgr_output")"

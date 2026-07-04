@@ -4,7 +4,7 @@ A guided GUI that migrates an installed **XeroLinux** system from **[GRUB](https
 
 <div align="center">
 
-![App Preview](XSBPreview.webp)
+![App Preview](XSB-GUI.webp)
 
 </div>
 

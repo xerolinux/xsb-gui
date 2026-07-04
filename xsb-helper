@@ -12,7 +12,6 @@ source "$LIB_DIR/preflight.sh"
 source "$LIB_DIR/chainload.sh"
 source "$LIB_DIR/migrate.sh"
 source "$LIB_DIR/secureboot.sh"
-source "$LIB_DIR/revert.sh"
 source "$LIB_DIR/doctor.sh"
 
 DRY_RUN=0
@@ -28,7 +27,7 @@ case "$subcommand" in
     migrate) cmd_migrate ;;
     apply-splash) cmd_apply_splash ;;
     cleanup) cmd_cleanup ;;
-    revert) cmd_revert ;;
+    repair-limine) cmd_repair_limine ;;
     enable-secureboot) cmd_enable_secureboot ;;
     reset-keys) cmd_reset_secureboot_keys ;;
     status) cmd_status ;;

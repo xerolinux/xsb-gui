@@ -72,6 +72,13 @@ def build_wizard(helper_path=HELPER_PATH, use_pkexec=True):
 
 def main():
     app = QApplication(sys.argv)
+    # Required on Wayland for the compositor to associate this running
+    # window with xsb-gui.desktop - without it, icon lookup and "pin to
+    # taskbar" both fail (icon shows as a generic placeholder, and pinning
+    # falls back to guessing the raw launch command instead of using the
+    # installed desktop entry). Must match the .desktop file's basename.
+    app.setDesktopFileName("xsb-gui")
+    app.setApplicationName("XeroLinux Limine/SecureBoot Enabler")
     wizard = build_wizard()
     wizard.show()
     maybe_warn_unsupported_distro(wizard)

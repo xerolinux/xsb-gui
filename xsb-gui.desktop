@@ -1,9 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=Limine/SecureBoot Enabler
-Comment=Migrate XeroLinux from GRUB to Limine and enable Secure Boot
+Comment=Migrate from GRUB to Limine and Secure Boot
 Exec=/usr/bin/xsb-gui
+TryExec=/usr/bin/xsb-gui
 Icon=xsb-gui
 Categories=System;Settings;
 Terminal=false
 StartupNotify=true
+StartupWMClass=xsb-gui

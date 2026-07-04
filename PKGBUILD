@@ -7,6 +7,7 @@ arch=('x86_64')
 url="https://github.com/xerolinux/xsb-gui"
 license=('GPL-3.0-or-later')
 depends=('python-pyqt6' 'polkit' 'sbctl' 'efibootmgr')
+makedepends=('imagemagick')
 optdepends=('limine: installed automatically by xsb-helper migrate when you choose to migrate'
             'limine-mkinitcpio-hook: installed automatically by xsb-helper migrate when you choose to migrate')
 install="${pkgname}.install"
@@ -30,6 +31,16 @@ package() {
     install -Dm644 "${srcdir}/../xsb-gui.desktop" "${pkgdir}/usr/share/applications/xsb-gui.desktop"
     install -Dm644 "${srcdir}/../xyz.xerolinux.xsb-gui.policy" \
         "${pkgdir}/usr/share/polkit-1/actions/xyz.xerolinux.xsb-gui.policy"
-    install -Dm644 "${srcdir}/../xsb_gui/assets/xsb-gui.png" \
+    # The source PNG is 1080x1080; icon theme caches (gtk-update-icon-cache
+    # and friends) validate that files under a declared hicolor size
+    # bucket actually match that size, and reject/skip mismatched ones -
+    # installing the raw file straight into 256x256/ silently produced a
+    # generic "missing icon" placeholder instead of the real one. Resize
+    # to actually match. Also install to pixmaps (size-agnostic) as a
+    # broader-compatibility fallback for launchers that check there first.
+    install -d "${pkgdir}/usr/share/icons/hicolor/256x256/apps"
+    magick "${srcdir}/../xsb_gui/assets/xsb-gui.png" -resize 256x256 \
         "${pkgdir}/usr/share/icons/hicolor/256x256/apps/xsb-gui.png"
+    install -Dm644 "${srcdir}/../xsb_gui/assets/xsb-gui.png" \
+        "${pkgdir}/usr/share/pixmaps/xsb-gui.png"
 }

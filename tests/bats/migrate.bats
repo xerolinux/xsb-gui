@@ -1248,3 +1248,102 @@ stub_cmd_migrate_happy_path() {
   [[ "$output" == *"cleanup_done"* ]]
   [[ "$output" == *"DONE_REACHED"* ]]
 }
+
+stub_cmd_repair_limine_happy_path() {
+  detect_bootloader() { echo "limine"; }
+  find_esp_mountpoint() { echo "/boot/efi"; return 0; }
+  detect_other_os() { echo ""; }
+  install_limine_packages() { emit_event "would_run" "info" "install limine"; }
+  deploy_limine_to_esp() { emit_event "would_run" "info" "deploy limine to esp skip_fallback=${2-0}"; }
+  resolve_esp_disk_and_part() { echo "/dev/vda 1"; }
+  register_efi_boot_entry() { emit_event "would_run" "info" "efibootmgr create"; }
+  run_limine_mkinitcpio() { emit_event "would_run" "info" "limine-mkinitcpio"; }
+  verify_limine_entry() { return 0; }
+  verify_limine_deployed() { return 0; }
+  verify_limine_conf_has_kernel_entry() { return 0; }
+}
+
+@test "cmd_repair_limine refuses when Limine is not the active bootloader" {
+  detect_bootloader() { echo "grub"; }
+  run cmd_repair_limine
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Limine is not the active bootloader; nothing to repair"* ]]
+}
+
+@test "cmd_repair_limine refuses when no EFI system partition is found" {
+  detect_bootloader() { echo "limine"; }
+  find_esp_mountpoint() { return 1; }
+  run cmd_repair_limine
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"No EFI system partition found"* ]]
+}
+
+@test "cmd_repair_limine runs the full ordered flow and previews a dry-run-aware completion message" {
+  stub_cmd_repair_limine_happy_path
+  DRY_RUN=1
+  run cmd_repair_limine
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Reinstalling Limine packages"* ]]
+  [[ "$output" == *"Redeploying Limine to the EFI system partition"* ]]
+  [[ "$output" == *"Re-registering Limine's EFI boot entry"* ]]
+  [[ "$output" == *"Regenerating initramfs"* ]]
+  [[ "$output" == *"Regenerating Limine boot entries"* ]]
+  [[ "$output" == *"Clear to repair"* ]]
+  [[ "$output" == *"press Apply Repair"* ]]
+  [[ "$output" != *"Limine repair complete."* ]]
+  # Never touches GRUB or limine.conf's chainload section.
+  [[ "$output" != *"grub"* ]]
+  [[ "$output" != *"write_limine_conf"* ]]
+}
+
+@test "cmd_repair_limine confirms completion for a real (non-dry-run) repair" {
+  stub_cmd_repair_limine_happy_path
+  run_cmd() { echo "RUN_CMD: $*"; }
+  DRY_RUN=0
+  run cmd_repair_limine
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Limine repair complete."* ]]
+  [[ "$output" != *"Clear to repair"* ]]
+}
+
+@test "cmd_repair_limine stops and reports an error when redeploying Limine fails" {
+  stub_cmd_repair_limine_happy_path
+  deploy_limine_to_esp() { return 1; }
+  register_efi_boot_entry() { echo "SHOULD_NOT_BE_CALLED"; }
+  DRY_RUN=1
+  run cmd_repair_limine
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Failed to redeploy Limine to the ESP"* ]]
+  [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
+}
+
+@test "cmd_repair_limine stops and reports an error when post-repair verification fails" {
+  stub_cmd_repair_limine_happy_path
+  verify_limine_conf_has_kernel_entry() { return 1; }
+  DRY_RUN=1
+  run cmd_repair_limine
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"could not be verified after repair"* ]]
+}
+
+@test "cmd_repair_limine skips the generic EFI fallback deploy when a non-Windows other OS is detected" {
+  stub_cmd_repair_limine_happy_path
+  detect_other_os() { echo "openSUSE Tumbleweed"; }
+  DRY_RUN=1
+  run cmd_repair_limine
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skip_fallback=1"* ]]
+}
+
+@test "cmd_repair_limine runs a post-repair boot doctor check and includes it in the output" {
+  stub_cmd_repair_limine_happy_path
+  is_uefi() { return 0; }
+  detect_partition_table() { return 0; }
+  efibootmgr() { printf 'Boot0000* XeroLinux\tHD(1,GPT,aaaa,0x800,0x100000)/File(\\EFI\\XeroLinux\\BOOTX64.EFI)\n'; }
+  export -f efibootmgr
+  DRY_RUN=1
+  run cmd_repair_limine
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"doctor_check"* ]]
+  [[ "$output" == *"doctor_done"* ]]
+}

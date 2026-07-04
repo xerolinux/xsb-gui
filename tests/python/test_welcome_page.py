@@ -73,7 +73,7 @@ def test_utility_buttons_sit_in_two_rows_between_the_caution_pill_and_checkbox(q
     assert top_row_idx != bottom_row_idx
     assert positions["caution"] < top_row_idx < bottom_row_idx < positions["checkbox"]
     # The other three utility buttons share the same (bottom) row.
-    assert _row_index_containing(layout, page.revert_button) == bottom_row_idx
+    assert _row_index_containing(layout, page.repair_button) == bottom_row_idx
     assert _row_index_containing(layout, page.doctor_button) == bottom_row_idx
 
 
@@ -99,12 +99,12 @@ def test_clicking_cleanup_button_opens_the_cleanup_dialog(qtbot):
     mock_dialog_cls.return_value.exec.assert_called_once()
 
 
-def test_clicking_revert_button_opens_the_revert_dialog(qtbot):
+def test_clicking_repair_button_opens_the_repair_limine_dialog(qtbot):
     page = WelcomePage(helper_path="/fake/helper", use_pkexec=False)
     qtbot.addWidget(page)
 
-    with patch("xsb_gui.pages.welcome_page.RevertDialog") as mock_dialog_cls:
-        page.revert_button.click()
+    with patch("xsb_gui.pages.welcome_page.RepairLimineDialog") as mock_dialog_cls:
+        page.repair_button.click()
 
     mock_dialog_cls.assert_called_once_with("/fake/helper", False, page)
     mock_dialog_cls.return_value.exec.assert_called_once()

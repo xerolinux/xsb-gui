@@ -243,9 +243,10 @@ setup() {
   [[ "$output" == *"Secure Boot is already enabled"* ]]
 }
 
-@test "cmd_preflight does NOT refuse when Secure Boot is already enabled and Limine is already the active bootloader" {
-  # Already-migrated, re-signing scenario - a legitimate, normal state that
-  # must not be blocked, unlike the GRUB+enabled combination above.
+@test "cmd_preflight refuses when Secure Boot is already enabled and fully configured by this tool - nothing left to do" {
+  # User's explicit choice: once Secure Boot is enabled with keys this tool
+  # itself enrolled, everything the wizard exists to set up is already
+  # done - block instead of running back through to a redundant re-sign.
   is_uefi() { return 0; }
   detect_partition_table() { return 0; }
   find_esp_mountpoint() { echo "/boot/efi"; }
@@ -256,10 +257,11 @@ setup() {
   detect_mkinitcpio_hook_family() { echo "none"; }
   detect_other_os() { echo ""; }
   detect_secureboot_state() { echo "enabled"; }
-  keys_enrolled() { return 1; }
+  keys_enrolled() { return 0; }
   sbctl_keys_exist_locally() { return 0; }
   run cmd_preflight
-  [ "$status" -eq 0 ]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"already enabled and fully configured by this tool"* ]]
 }
 
 @test "cmd_preflight refuses when Secure Boot keys are enrolled but not by this tool (idea 1)" {

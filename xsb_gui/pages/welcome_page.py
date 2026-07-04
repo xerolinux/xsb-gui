@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
 from xsb_gui.widgets.marching_ants_frame import MarchingAntsFrame
 from xsb_gui.widgets.secureboot_status_dialog import SecureBootStatusDialog
 from xsb_gui.widgets.cleanup_dialog import CleanupDialog
-from xsb_gui.widgets.revert_dialog import RevertDialog
+from xsb_gui.widgets.repair_limine_dialog import RepairLimineDialog
 from xsb_gui.widgets.boot_doctor_dialog import BootDoctorDialog
 
 CAUTION_TEXT = (
@@ -19,15 +19,15 @@ CAUTION_TEXT = (
 )
 
 WARNING_TEXT = (
-    "<p>GRUB currently has known compatibility issues with UEFI Secure Boot on "
-    "Arch-based systems and is not recommended if you want Secure Boot enabled. "
-    "This wizard migrates you to Limine, which supports Secure Boot more reliably.</p>"
-    "<p>This will <b>permanently remove GRUB</b> and related packages (grub, grub-hooks, "
-    "update-grub, os-prober) and their files from this system, install Limine and "
-    "limine-mkinitcpio-hook, and set Limine up as the bootloader.</p>"
-    "<p>If your firmware's Secure Boot Setup Mode is active, Secure Boot keys will also be "
-    "created and enrolled.</p>"
-    "<p><b>This cannot be undone</b> without manual recovery.</p>"
+    "<p>GRUB has known Secure Boot compatibility issues on Arch-based systems. This "
+    "wizard migrates you to Limine, which supports Secure Boot reliably - and works "
+    "the same with or without it enabled.</p>"
+    "<p>This <b>permanently removes GRUB</b> and related packages, installs Limine, "
+    "and sets it up as your bootloader. If Secure Boot Setup Mode is active, keys "
+    "are created and enrolled too.</p>"
+    "<p><b>This cannot be undone</b> without manual recovery. If something breaks, "
+    "try disabling Secure Boot and clearing its keys in firmware settings first - "
+    "if that doesn't help, a system reinstall may be required.</p>"
 )
 
 
@@ -65,14 +65,14 @@ class WelcomePage(QWizardPage):
         self.check_status_button.clicked.connect(self._on_check_status_clicked)
         self.cleanup_button = QPushButton("Clean up ESP")
         self.cleanup_button.clicked.connect(self._on_cleanup_clicked)
-        self.revert_button = QPushButton("Revert to GRUB")
-        self.revert_button.clicked.connect(self._on_revert_clicked)
+        self.repair_button = QPushButton("Repair Limine")
+        self.repair_button.clicked.connect(self._on_repair_clicked)
         self.doctor_button = QPushButton("Boot Diagnostics")
         self.doctor_button.clicked.connect(self._on_doctor_clicked)
         # Give every button the same fixed width (the widest one's natural
         # width, so no label is truncated) so both rows align visually.
         self._utility_buttons = (
-            self.check_status_button, self.cleanup_button, self.revert_button, self.doctor_button,
+            self.check_status_button, self.cleanup_button, self.repair_button, self.doctor_button,
         )
         uniform_width = max(b.sizeHint().width() for b in self._utility_buttons)
         for button in self._utility_buttons:
@@ -91,7 +91,7 @@ class WelcomePage(QWizardPage):
         bottom_row.setSpacing(28)
         bottom_row.addStretch(1)
         bottom_row.addWidget(self.cleanup_button)
-        bottom_row.addWidget(self.revert_button)
+        bottom_row.addWidget(self.repair_button)
         bottom_row.addWidget(self.doctor_button)
         bottom_row.addStretch(1)
         layout.addLayout(bottom_row)
@@ -111,8 +111,8 @@ class WelcomePage(QWizardPage):
         dialog = CleanupDialog(self._helper_path, self._use_pkexec, self)
         dialog.exec()
 
-    def _on_revert_clicked(self):
-        dialog = RevertDialog(self._helper_path, self._use_pkexec, self)
+    def _on_repair_clicked(self):
+        dialog = RepairLimineDialog(self._helper_path, self._use_pkexec, self)
         dialog.exec()
 
     def _on_doctor_clicked(self):

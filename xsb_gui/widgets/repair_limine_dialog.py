@@ -6,29 +6,30 @@ from xsb_gui.helper_runner import HelperRunner
 from xsb_gui.parsing import format_event_line
 
 INTRO_TEXT = (
-    "<b>Revert to GRUB.</b> This reinstalls GRUB from the backup taken during "
-    "migration, restores your original configuration, and removes Limine. It "
-    "only works if you migrated with this tool (so a backup exists) and Secure "
-    "Boot is currently disabled."
+    "<b>Repair Limine.</b> Reinstalls Limine's packages, redeploys its EFI binaries, "
+    "re-registers its firmware boot entry, and regenerates its kernel entries. Use "
+    "this if something about your Limine setup seems broken - it never touches GRUB "
+    "or your chainload entries for other operating systems, and Limine itself works "
+    "the same with or without Secure Boot."
 )
-CHECKING_TEXT = "Checking whether a revert is possible..."
-PREVIEW_TEXT = "This is what a revert would do. Nothing has changed yet - press Apply to revert to GRUB."
-APPLYING_TEXT = "Reverting to GRUB..."
-DONE_TEXT = "Revert complete. Reboot to boot GRUB again."
-FAILED_TEXT = "Revert did not complete."
+CHECKING_TEXT = "Checking whether a repair is possible..."
+PREVIEW_TEXT = "This is what a repair would do. Nothing has changed yet - press Apply to repair Limine."
+APPLYING_TEXT = "Repairing Limine..."
+DONE_TEXT = "Repair complete."
+FAILED_TEXT = "Repair did not complete."
 
 
-class RevertDialog(QDialog):
-    """Restore the pre-migration GRUB setup and remove Limine.
+class RepairLimineDialog(QDialog):
+    """Re-run Limine's own deployment/registration steps in place.
 
-    Runs xsb-helper's "revert --dry-run" first so the user sees the full ordered
-    plan (and any refusal, e.g. no backup or Secure Boot still enabled), and only
-    changes anything after an explicit Apply.
+    Runs xsb-helper's "repair-limine --dry-run" first so the user sees the
+    full ordered plan (and any refusal, e.g. Limine not active or no ESP),
+    and only changes anything after an explicit Apply.
     """
 
     def __init__(self, helper_path, use_pkexec, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Revert to GRUB")
+        self.setWindowTitle("Repair Limine")
         self.setModal(True)
         self.setMinimumSize(560, 420)
         self._helper_path = helper_path
@@ -55,7 +56,7 @@ class RevertDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
-        self.apply_button = QPushButton("Apply Revert")
+        self.apply_button = QPushButton("Apply Repair")
         self.apply_button.setEnabled(False)
         self.apply_button.clicked.connect(self._on_apply_clicked)
         buttons.addWidget(self.apply_button)
@@ -65,7 +66,7 @@ class RevertDialog(QDialog):
         layout.addLayout(buttons)
 
         self._runner = None
-        self._start("revert", "--dry-run")
+        self._start("repair-limine", "--dry-run")
 
     def _start(self, *args):
         self._runner = HelperRunner(helper_path=self._helper_path, use_pkexec=self._use_pkexec)
@@ -80,12 +81,12 @@ class RevertDialog(QDialog):
             self._would_change += 1
         elif name == "error":
             self._errored = True
-            self.status_label.setText(event.get("message", "Revert could not run."))
+            self.status_label.setText(event.get("message", "Repair could not run."))
         self.log.appendPlainText(format_event_line(event))
 
     def _on_error(self, message):
         self._errored = True
-        self.status_label.setText(f"Could not run revert: {message}")
+        self.status_label.setText(f"Could not run repair: {message}")
 
     def _on_finished(self, exit_code):
         if self._errored:
@@ -108,7 +109,7 @@ class RevertDialog(QDialog):
         self.apply_button.setEnabled(False)
         self.status_label.setText(APPLYING_TEXT)
         self.log.appendPlainText("")
-        self._start("revert")
+        self._start("repair-limine")
 
     def done(self, result):
         if self._runner is not None:

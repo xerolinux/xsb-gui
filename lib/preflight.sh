@@ -127,12 +127,9 @@ cmd_preflight() {
     [[ -z "$esp_size_bytes" ]] && esp_size_bytes="0"
     esp_free_bytes="$(detect_esp_free_bytes "$esp_mountpoint")" || esp_free_bytes="0"
     [[ -z "$esp_free_bytes" ]] && esp_free_bytes="0"
-    # Hard floor (64MiB), distinct from parsing.py's softer 256MiB "getting
-    # low" warning that still lets the user proceed: below this there is
-    # genuinely not enough room for Limine plus a kernel/initramfs copy, so
-    # continuing would just fail partway through instead of refusing
-    # cleanly up front. Skipped when esp_free_bytes couldn't be determined
-    # (0) - that's "unknown", not "confirmed too small".
+    # Hard floor (64MiB), distinct from parsing.py's softer 256MiB warning:
+    # below this there's genuinely not enough room for Limine plus a
+    # kernel/initramfs copy. Skipped when esp_free_bytes is unknown (0).
     if [[ "$esp_free_bytes" -gt 0 ]] && [[ "$esp_free_bytes" -lt 67108864 ]]; then
         emit_event "error" "error" "The EFI system partition has less than 64MB free. There is not enough room to install Limine and a kernel/initramfs copy."
         return 1
@@ -167,6 +164,15 @@ cmd_preflight() {
     # discovered only after migration/signing has already started.
     if { [[ "$secureboot_state" == "enabled" ]] || keys_enrolled; } && ! sbctl_keys_exist_locally; then
         emit_event "error" "error" "Secure Boot keys are already enrolled in firmware, but not by this tool. Proceeding could not safely sign anything against an unrelated existing enrollment. Reboot into UEFI firmware settings and clear all Secure Boot keys (PK, KEK, db, dbx) to start fresh, then run this again."
+        return 1
+    fi
+    # Also a hard stop, the opposite case: Secure Boot already enabled AND
+    # the keys are this tool's own - everything is already set up. By this
+    # point bootloader can only be "limine" (grub+enabled and
+    # bootloader=="none" were already refused above), so block rather than
+    # run through to a redundant re-sign.
+    if [[ "$secureboot_state" == "enabled" ]] && keys_enrolled && sbctl_keys_exist_locally; then
+        emit_event "error" "error" "Secure Boot is already enabled and fully configured by this tool. There is nothing further to do here."
         return 1
     fi
     emit_preflight_result "true" "$gpt" "$esp_mountpoint" "$bootloader" "$luks" \

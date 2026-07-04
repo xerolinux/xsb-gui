@@ -145,6 +145,17 @@ setup() {
   [[ "$output" == *"UEFI"* ]]
 }
 
+@test "cmd_preflight refuses on a non-GPT (MBR/BIOS-style) disk" {
+  is_uefi() { return 0; }
+  detect_partition_table() { return 1; }
+  find_esp_mountpoint() { echo "SHOULD_NOT_BE_CALLED"; }
+  run cmd_preflight
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"event":"error"'* ]]
+  [[ "$output" == *"GPT"* ]]
+  [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
+}
+
 @test "cmd_preflight (UEFI) emits preflight_result" {
   is_uefi() { return 0; }
   find_esp_mountpoint() { echo "/boot/efi"; return 0; }

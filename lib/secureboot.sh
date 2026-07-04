@@ -173,6 +173,10 @@ cmd_enable_secureboot() {
                 return 1
             }
             configure_fwupd_secureboot
+            # Post-signing self-check: best-effort, `|| true` since a
+            # finding here must never turn an already-successful (re-)sign
+            # into a reported failure.
+            run_boot_doctor_checks || true
             emit_event "secureboot_already_active" "info" "Secure Boot re-signing complete."
         else
             emit_event "secureboot_step" "info" "Keys already enrolled. Re-signing EFI binaries."
@@ -181,6 +185,7 @@ cmd_enable_secureboot() {
                 return 1
             }
             configure_fwupd_secureboot
+            run_boot_doctor_checks || true
             emit_event "secureboot_needs_reboot" "info" "Reboot into firmware setup and enable Secure Boot."
         fi
         return 0
@@ -219,6 +224,7 @@ cmd_enable_secureboot() {
         return 1
     }
     configure_fwupd_secureboot
+    run_boot_doctor_checks || true
 
     emit_event "secureboot_needs_reboot" "info" "Secure Boot setup complete. Reboot into firmware settings and enable Secure Boot."
 }

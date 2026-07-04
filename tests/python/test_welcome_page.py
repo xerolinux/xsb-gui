@@ -71,6 +71,7 @@ def test_utility_buttons_sit_in_a_row_between_the_caution_pill_and_checkbox(qtbo
     # All utility buttons share the same row.
     assert _row_index_containing(layout, page.cleanup_button) == row_idx
     assert _row_index_containing(layout, page.revert_button) == row_idx
+    assert _row_index_containing(layout, page.doctor_button) == row_idx
 
 
 def test_clicking_check_status_button_opens_the_status_dialog(qtbot):
@@ -101,6 +102,17 @@ def test_clicking_revert_button_opens_the_revert_dialog(qtbot):
 
     with patch("xsb_gui.pages.welcome_page.RevertDialog") as mock_dialog_cls:
         page.revert_button.click()
+
+    mock_dialog_cls.assert_called_once_with("/fake/helper", False, page)
+    mock_dialog_cls.return_value.exec.assert_called_once()
+
+
+def test_clicking_doctor_button_opens_the_boot_doctor_dialog(qtbot):
+    page = WelcomePage(helper_path="/fake/helper", use_pkexec=False)
+    qtbot.addWidget(page)
+
+    with patch("xsb_gui.pages.welcome_page.BootDoctorDialog") as mock_dialog_cls:
+        page.doctor_button.click()
 
     mock_dialog_cls.assert_called_once_with("/fake/helper", False, page)
     mock_dialog_cls.return_value.exec.assert_called_once()

@@ -2,6 +2,10 @@
 
 setup() {
   source "${BATS_TEST_DIRNAME}/../../lib/jsonevent.sh"
+  source "${BATS_TEST_DIRNAME}/../../lib/preflight.sh"
+  source "${BATS_TEST_DIRNAME}/../../lib/chainload.sh"
+  source "${BATS_TEST_DIRNAME}/../../lib/migrate.sh"
+  source "${BATS_TEST_DIRNAME}/../../lib/doctor.sh"
   source "${BATS_TEST_DIRNAME}/../../lib/secureboot.sh"
 }
 
@@ -476,4 +480,34 @@ setup() {
   keys_enrolled() { return 1; }
   result="$(cmd_enable_secureboot)"
   [[ "$result" == *"configure_fwupd_secureboot called"* ]]
+}
+
+@test "cmd_enable_secureboot runs a post-signing boot doctor check on all three success paths, without failing on a finding" {
+  find_esp_mountpoint() { echo "/boot/efi"; }
+  choose_enroll_cmd() { echo "sbctl enroll-keys --microsoft"; }
+  sign_efi_binaries() { emit_event "would_run" "info" "sbctl sign-all"; }
+  configure_fwupd_secureboot() { :; }
+  run_boot_doctor_checks() { emit_event "doctor_done" "error" "simulated doctor failure"; return 1; }
+  DRY_RUN=1
+
+  detect_secureboot_state() { echo "enabled"; }
+  sbctl_keys_exist_locally() { return 0; }
+  run cmd_enable_secureboot
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"simulated doctor failure"* ]]
+  [[ "$output" == *"secureboot_already_active"* ]]
+
+  detect_secureboot_state() { echo "setup_mode"; }
+  keys_enrolled() { return 0; }
+  in_setup_mode() { return 0; }
+  run cmd_enable_secureboot
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"simulated doctor failure"* ]]
+  [[ "$output" == *"secureboot_needs_reboot"* ]]
+
+  keys_enrolled() { return 1; }
+  run cmd_enable_secureboot
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"simulated doctor failure"* ]]
+  [[ "$output" == *"secureboot_needs_reboot"* ]]
 }

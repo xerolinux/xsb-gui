@@ -108,6 +108,13 @@ cmd_preflight() {
         emit_event "error" "error" "This system is not booted in UEFI mode. Secure Boot and this migration are unavailable."
         return 1
     fi
+    emit_event "preflight_step" "info" "Checking partition table type"
+    local gpt="false"
+    detect_partition_table && gpt="true"
+    if [[ "$gpt" != "true" ]]; then
+        emit_event "error" "error" "This system's disk is not using a GPT partition table. UEFI firmware requires GPT, so BIOS/MBR-style disks are not supported by this tool."
+        return 1
+    fi
     emit_event "preflight_step" "info" "Checking EFI system partition"
     local esp_mountpoint
     esp_mountpoint="$(find_esp_mountpoint)" || esp_mountpoint=""
@@ -118,9 +125,6 @@ cmd_preflight() {
         esp_free_bytes="$(detect_esp_free_bytes "$esp_mountpoint")" || esp_free_bytes="0"
         [[ -z "$esp_free_bytes" ]] && esp_free_bytes="0"
     fi
-    emit_event "preflight_step" "info" "Checking partition table type"
-    local gpt="false"
-    detect_partition_table && gpt="true"
     emit_event "preflight_step" "info" "Checking current bootloader"
     local bootloader
     bootloader="$(detect_bootloader)"

@@ -35,6 +35,47 @@ grub_bootloader_id_from_backup() {
     printf '%s' "${label:-GRUB}"
 }
 
+# Records the current time and installed kernel packages into the backup
+# dir, for backup_grub_state_staleness_warning to compare against later.
+# Best-effort: a failure here must never fail the backup it's part of.
+snapshot_kernel_state_for_backup() {
+    local backup_dir="$1"
+    date +%s > "${backup_dir}/timestamp.txt" 2>/dev/null || true
+    pacman -Q 2>/dev/null | grep -E '^linux[a-z0-9_-]*[[:space:]]' > "${backup_dir}/kernel-packages.txt" || true
+}
+
+# Best-effort, purely informational: warns (never blocks) if the GRUB
+# backup is old enough, or predates enough kernel updates, that the
+# restored grub.cfg may not reflect the system's current state. Prints a
+# message and returns 0 if there's something worth flagging; prints
+# nothing and returns 1 otherwise (including when there's no timestamp to
+# compare, e.g. a backup made before this check existed).
+backup_grub_state_staleness_warning() {
+    local backup_dir="${1-$XSB_BACKUP_DIR}"
+    local now="${2-$(date +%s)}"
+    local max_age_days="${3-30}"
+
+    local backup_ts
+    backup_ts="$(cat "${backup_dir}/timestamp.txt" 2>/dev/null)"
+    if [[ "$backup_ts" =~ ^[0-9]+$ ]]; then
+        local age_days=$(( (now - backup_ts) / 86400 ))
+        if [[ "$age_days" -gt "$max_age_days" ]]; then
+            printf 'The GRUB backup used for this revert is %s days old. If your system has changed significantly since migrating, the restored configuration may not reflect it.' "$age_days"
+            return 0
+        fi
+    fi
+
+    local backed_up_pkgs current_pkgs
+    backed_up_pkgs="$(cat "${backup_dir}/kernel-packages.txt" 2>/dev/null)"
+    current_pkgs="${4-$(pacman -Q 2>/dev/null | grep -E '^linux[a-z0-9_-]*[[:space:]]')}"
+    if [[ -n "$backed_up_pkgs" ]] && [[ "$backed_up_pkgs" != "$current_pkgs" ]]; then
+        printf 'Kernel packages have changed since this GRUB backup was made (e.g. a kernel update). The restored configuration may not include an entry for your current kernel.'
+        return 0
+    fi
+
+    return 1
+}
+
 backup_grub_state() {
     local esp_mountpoint="${1-/boot/efi}"
     local backup_dir="${2-$XSB_BACKUP_DIR}"
@@ -66,6 +107,8 @@ backup_grub_state() {
     pacman -Qq grub grub-hooks update-grub os-prober 2>/dev/null > "${backup_dir}/packages.txt" || true
     efibootmgr -v 2>/dev/null | grep -iE 'grubx64\.efi' > "${backup_dir}/nvram-grub.txt" || true
     efibootmgr 2>/dev/null | grep -iE '^BootOrder:' > "${backup_dir}/bootorder.txt" || true
+
+    snapshot_kernel_state_for_backup "$backup_dir"
 
     # Completeness marker, written last so a partial backup is never revertible.
     printf 'esp_mountpoint=%s\n' "$esp_mountpoint" > "${backup_dir}/MANIFEST" || return 1
@@ -151,6 +194,11 @@ cmd_revert() {
         emit_event "error" "error" "No pre-migration GRUB backup found at ${XSB_BACKUP_DIR}. There is nothing to revert to (a backup is only created when you migrate with this tool)."
         return 1
     fi
+
+    local staleness_warning
+    staleness_warning="$(backup_grub_state_staleness_warning)" && \
+        emit_event "revert_step" "warning" "$staleness_warning"
+
     if [[ "$(detect_bootloader)" != "limine" ]]; then
         emit_event "error" "error" "Limine is not the active bootloader; nothing to revert."
         return 1
@@ -180,6 +228,34 @@ cmd_revert() {
         return 1
     }
 
+    # Migration also writes Limine's binary to the generic UEFI fallback path
+    # (EFI/Boot/BOOTX64.EFI) so firmware can find it even without a working
+    # NVRAM entry - see deploy_limine_to_esp in migrate.sh. remove_limine
+    # below does not touch that path, so without clearing it here too,
+    # firmware that falls back to it after Limine's NVRAM entry is removed
+    # loads Limine's now configless binary instead of GRUB: an empty Limine
+    # menu with no entries and no way to reach the freshly reinstalled GRUB,
+    # even though GRUB's own NVRAM entry is present and correct.
+    #
+    # Deliberately deletes rather than installing GRUB there via
+    # `grub-install --removable`: that permanently plants a second,
+    # separately-tracked GRUB install at a well-known path shared with any
+    # future OS install, which can conflict down the line and confuses this
+    # tool's own other-OS fallback-ownership detection. Deleting just undoes
+    # exactly what migration added, leaving firmware to fall through to the
+    # NVRAM entry grub-install just registered. Mirrors migrate.sh's own
+    # skip_fallback check: never touch that path if a real non-Windows OS
+    # bootloader legitimately owns it.
+    local other_os
+    other_os="$(detect_other_os)"
+    if ! has_non_windows_other_os "$other_os" && [[ -e "${esp_mountpoint}/EFI/Boot/BOOTX64.EFI" ]]; then
+        emit_event "revert_step" "info" "Clearing Limine's leftover UEFI fallback binary"
+        run_cmd /usr/bin/rm -f "${esp_mountpoint}/EFI/Boot/BOOTX64.EFI" || {
+            emit_event "error" "error" "Failed to clear Limine's leftover fallback binary. Limine has NOT been touched; your system still boots via Limine."
+            return 1
+        }
+    fi
+
     emit_event "revert_step" "info" "Restoring your original GRUB configuration"
     restore_grub_files || {
         emit_event "error" "error" "Failed to restore GRUB configuration files. Limine has NOT been touched; your system still boots via Limine."
@@ -197,6 +273,13 @@ cmd_revert() {
         emit_event "error" "error" "Failed to fully remove Limine. GRUB is restored and bootable; you can remove leftover Limine files manually."
         return 1
     }
+
+    # Post-revert self-check: this is exactly the class of bug a real
+    # incident exposed (a stale Limine fallback binary left behind after
+    # revert), so this check would have caught it before the next reboot.
+    # `|| true` - a finding here must never turn an already-successful
+    # revert into a reported failure.
+    run_boot_doctor_checks || true
 
     emit_event "revert_done" "info" "Revert complete. GRUB is restored; reboot to use it."
 }

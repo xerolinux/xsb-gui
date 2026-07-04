@@ -2,7 +2,10 @@
 
 setup() {
   source "${BATS_TEST_DIRNAME}/../../lib/jsonevent.sh"
+  source "${BATS_TEST_DIRNAME}/../../lib/preflight.sh"
   source "${BATS_TEST_DIRNAME}/../../lib/chainload.sh"
+  source "${BATS_TEST_DIRNAME}/../../lib/secureboot.sh"
+  source "${BATS_TEST_DIRNAME}/../../lib/doctor.sh"
   source "${BATS_TEST_DIRNAME}/../../lib/migrate.sh"
 }
 
@@ -121,9 +124,10 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-@test "verify_limine_conf_has_kernel_entry true when a protocol: linux stanza is present" {
+@test "verify_limine_conf_has_kernel_entry true when a protocol: linux stanza is present AND the kernel file exists" {
   target="$BATS_TEST_TMPDIR/limine.conf"
   printf 'timeout: 5\ndefault_entry: 1\n\n/XeroLinux\n    protocol: linux\n    kernel_path: boot():/vmlinuz-linux\n' > "$target"
+  : > "$BATS_TEST_TMPDIR/vmlinuz-linux"
   run verify_limine_conf_has_kernel_entry "$target"
   [ "$status" -eq 0 ]
 }
@@ -138,6 +142,28 @@ setup() {
 @test "verify_limine_conf_has_kernel_entry fails (non-zero) when the file does not exist" {
   run verify_limine_conf_has_kernel_entry "$BATS_TEST_TMPDIR/does-not-exist/limine.conf"
   [ "$status" -ne 0 ]
+}
+
+@test "verify_limine_conf_has_kernel_entry fails when protocol: linux is present but the referenced kernel file is missing" {
+  # Regression (F2): a textual "protocol: linux" match alone doesn't prove
+  # the kernel it references actually exists - this would let GRUB be
+  # removed atop a config pointing at a missing kernel image.
+  target="$BATS_TEST_TMPDIR/limine.conf"
+  printf 'timeout: 5\ndefault_entry: 1\n\n/XeroLinux\n    protocol: linux\n    path: boot():/vmlinuz-linux\n' > "$target"
+  run verify_limine_conf_has_kernel_entry "$target"
+  [ "$status" -ne 0 ]
+}
+
+@test "verify_limine_conf_has_kernel_entry ignores module_path (initramfs) and checks the actual kernel path" {
+  target="$BATS_TEST_TMPDIR/limine.conf"
+  mkdir -p "$BATS_TEST_TMPDIR/abc123"
+  : > "$BATS_TEST_TMPDIR/abc123/initramfs-linux.img"
+  printf '/XeroLinux\n    protocol: linux\n    module_path: boot():/abc123/initramfs-linux.img\n    path: boot():/abc123/vmlinuz-linux\n' > "$target"
+  run verify_limine_conf_has_kernel_entry "$target"
+  [ "$status" -ne 0 ]
+  : > "$BATS_TEST_TMPDIR/abc123/vmlinuz-linux"
+  run verify_limine_conf_has_kernel_entry "$target"
+  [ "$status" -eq 0 ]
 }
 
 @test "resolve_root_cmdline_params non-LUKS uses root=UUID=" {
@@ -333,21 +359,34 @@ setup() {
   [ ! -e "$target" ]
 }
 
-@test "find_grub_efi_bootnum returns only the GRUB entry's hex bootnum" {
-  efibootmgr_output=$'BootCurrent: 0001\nBootOrder: 0000,0001\nBoot0000* XeroLinux\tHD(1,GPT,aaaa,0x800,0x100000)/File(\\EFI\\XeroLinux\\grubx64.efi)\nBoot0001* XeroLinux\tHD(1,GPT,aaaa,0x800,0x100000)/File(\\EFI\\XeroLinux\\BOOTX64.EFI)'
-  result="$(find_grub_efi_bootnum "$efibootmgr_output")"
+@test "find_grub_efi_bootnum matches by real loader path, not by an assumed XeroLinux label" {
+  # Regression: the original installer almost never labels GRUB's own NVRAM
+  # entry "XeroLinux" - it's whatever bootloader-id THAT installer used
+  # (here "opensuse"). A fixed-label match would silently find nothing.
+  efibootmgr_output=$'BootCurrent: 0001\nBootOrder: 0000,0001\nBoot0000* opensuse-secureboot\tHD(1,GPT,aaaa,0x800,0x100000)/File(\\EFI\\opensuse\\grubx64.efi)\nBoot0001* XeroLinux\tHD(1,GPT,aaaa,0x800,0x100000)/File(\\EFI\\XeroLinux\\BOOTX64.EFI)'
+  result="$(find_grub_efi_bootnum "$efibootmgr_output" $'/EFI/opensuse/grubx64.efi')"
   [ "$result" = "0000" ]
 }
 
-@test "find_grub_efi_bootnum returns empty when no GRUB entry exists" {
-  efibootmgr_output=$'Boot0001* XeroLinux\tHD(1,GPT,aaaa,0x800,0x100000)/File(\\EFI\\XeroLinux\\BOOTX64.EFI)'
-  result="$(find_grub_efi_bootnum "$efibootmgr_output")"
+@test "find_grub_efi_bootnum does not match an unrelated OS's GRUB entry not found on this ESP" {
+  # Safety check: a bare "any grubx64.efi" match (the naive alternative fix)
+  # would delete a different OS's unrelated GRUB entry in a dual-boot setup.
+  # Only paths remove_grub actually found on THIS system's ESP are passed in,
+  # so an entry pointing elsewhere must never match.
+  efibootmgr_output=$'Boot0000* ubuntu\tHD(2,GPT,bbbb,0x800,0x100000)/File(\\EFI\\ubuntu\\grubx64.efi)\nBoot0001* XeroLinux\tHD(1,GPT,aaaa,0x800,0x100000)/File(\\EFI\\XeroLinux\\BOOTX64.EFI)'
+  result="$(find_grub_efi_bootnum "$efibootmgr_output" $'/EFI/opensuse/grubx64.efi')"
+  [ -z "$result" ]
+}
+
+@test "find_grub_efi_bootnum returns empty when no grub_efi_paths are given" {
+  efibootmgr_output=$'Boot0000* opensuse\tHD(1,GPT,aaaa,0x800,0x100000)/File(\\EFI\\opensuse\\grubx64.efi)'
+  result="$(find_grub_efi_bootnum "$efibootmgr_output" "")"
   [ -z "$result" ]
 }
 
 @test "find_grub_efi_bootnum exits 0 even when nothing is found (safe under set -e pipefail)" {
   efibootmgr_output=$'Boot0001* XeroLinux\tHD(1,GPT,aaaa,0x800,0x100000)/File(\\EFI\\XeroLinux\\BOOTX64.EFI)'
-  run find_grub_efi_bootnum "$efibootmgr_output"
+  run find_grub_efi_bootnum "$efibootmgr_output" $'/EFI/opensuse/grubx64.efi'
   [ "$status" -eq 0 ]
 }
 
@@ -357,7 +396,7 @@ setup() {
     source '${BATS_TEST_DIRNAME}/../../lib/jsonevent.sh'
     source '${BATS_TEST_DIRNAME}/../../lib/migrate.sh'
     efibootmgr_output=\$'Boot0001* XeroLinux\tHD(1,GPT,aaaa,0x800,0x100000)/File(\\\\EFI\\\\XeroLinux\\\\BOOTX64.EFI)'
-    grub_bootnum=\"\$(find_grub_efi_bootnum \"\$efibootmgr_output\")\"
+    grub_bootnum=\"\$(find_grub_efi_bootnum \"\$efibootmgr_output\" \$'/EFI/opensuse/grubx64.efi')\"
     echo \"ok:[\$grub_bootnum]\"
   "
   [ "$status" -eq 0 ]
@@ -410,6 +449,31 @@ setup() {
   }
   run remove_grub "$BATS_TEST_TMPDIR/esp" $'grub\ngrub-hooks'
   [ "$status" -ne 0 ]
+}
+
+@test "remove_grub finds and removes GRUB's real NVRAM entry end-to-end, without stubbing find_grub_efi_bootnum" {
+  # Regression test for the "XeroLinux label" bug: this GRUB entry is
+  # labeled per its own original installer's bootloader-id ("opensuse"),
+  # never "XeroLinux" - proving the fix finds it by real loader path.
+  DRY_RUN=0
+  esp="$BATS_TEST_TMPDIR/esp"
+  mkdir -p "$esp/EFI/opensuse"
+  : > "$esp/EFI/opensuse/grubx64.efi"
+  efibootmgr() {
+    if [[ "$1" == "-v" ]]; then
+      printf 'Boot0000* opensuse-secureboot\tHD(1,GPT,aaaa,0x800,0x100000)/File(\\EFI\\opensuse\\grubx64.efi)\n'
+    fi
+  }
+  run_cmd() {
+    if [[ "$1" == "/usr/bin/efibootmgr" ]]; then
+      echo "RUN_CMD: $*"
+      return 0
+    fi
+    return 0
+  }
+  export -f efibootmgr
+  result="$(remove_grub "$esp" "")"
+  [[ "$result" == *"RUN_CMD: /usr/bin/efibootmgr -b 0000 -B"* ]]
 }
 
 @test "remove_grub_efi_leftovers deletes grub*.efi files under ESP EFI dirs regardless of bootloader-id directory name" {
@@ -587,6 +651,34 @@ stub_cmd_migrate_happy_path() {
   run cmd_migrate
   [ "$status" -eq 0 ]
   [[ "$output" == *"pacman -Rns grub"* ]]
+  [[ "$output" == *"migrate_done"* ]]
+}
+
+@test "cmd_migrate runs a post-migration boot doctor check and includes it in the output" {
+  # detect_bootloader stays "grub" throughout (stub_cmd_migrate_happy_path's
+  # own value) since cmd_migrate itself requires it at entry - this only
+  # needs to prove the doctor check's output is wired into migrate's own
+  # output stream, not simulate a fully realistic post-migration state.
+  stub_cmd_migrate_happy_path
+  is_uefi() { return 0; }
+  detect_partition_table() { return 0; }
+  efibootmgr() { printf 'Boot0000* XeroLinux\tHD(1,GPT,aaaa,0x800,0x100000)/File(\\EFI\\XeroLinux\\BOOTX64.EFI)\n'; }
+  export -f efibootmgr
+  DRY_RUN=1
+  run cmd_migrate
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"doctor_check"* ]]
+  [[ "$output" == *"doctor_done"* ]]
+  [[ "$output" == *"migrate_done"* ]]
+}
+
+@test "cmd_migrate still reports success even when the post-migration doctor check finds a problem" {
+  stub_cmd_migrate_happy_path
+  run_boot_doctor_checks() { emit_event "doctor_done" "error" "simulated doctor failure"; return 1; }
+  DRY_RUN=1
+  run cmd_migrate
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"simulated doctor failure"* ]]
   [[ "$output" == *"migrate_done"* ]]
 }
 

@@ -6,6 +6,7 @@ setup() {
   source "${BATS_TEST_DIRNAME}/../../lib/chainload.sh"
   source "${BATS_TEST_DIRNAME}/../../lib/secureboot.sh"
   source "${BATS_TEST_DIRNAME}/../../lib/migrate.sh"
+  source "${BATS_TEST_DIRNAME}/../../lib/doctor.sh"
   source "${BATS_TEST_DIRNAME}/../../lib/revert.sh"
 }
 
@@ -35,6 +36,76 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"would_run"* ]]
   [ ! -e "$d/MANIFEST" ]
+}
+
+@test "snapshot_kernel_state_for_backup records a timestamp and the currently-installed kernel packages" {
+  d="$BATS_TEST_TMPDIR/bk"
+  mkdir -p "$d"
+  pacman() {
+    if [[ "$1" == "-Q" ]]; then printf 'linux 6.10.1-1\nvim 9.0-1\n'; fi
+  }
+  export -f pacman
+  snapshot_kernel_state_for_backup "$d"
+  [[ "$(cat "$d/timestamp.txt")" =~ ^[0-9]+$ ]]
+  [[ "$(cat "$d/kernel-packages.txt")" == "linux 6.10.1-1" ]]
+}
+
+@test "backup_grub_state_staleness_warning: nothing to warn about when recent and kernel packages match" {
+  d="$BATS_TEST_TMPDIR/bk"
+  mkdir -p "$d"
+  now=1700000000
+  printf '%s' "$now" > "$d/timestamp.txt"
+  printf 'linux 6.10.1-1\n' > "$d/kernel-packages.txt"
+  run backup_grub_state_staleness_warning "$d" "$now" 30 "linux 6.10.1-1"
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+}
+
+@test "backup_grub_state_staleness_warning: warns when the backup is older than the age threshold" {
+  d="$BATS_TEST_TMPDIR/bk"
+  mkdir -p "$d"
+  printf '%s' "1000000000" > "$d/timestamp.txt"
+  now=$((1000000000 + 40 * 86400))
+  run backup_grub_state_staleness_warning "$d" "$now" 30
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"40 days old"* ]]
+}
+
+@test "backup_grub_state_staleness_warning: warns when kernel packages differ from backup time, even if recent" {
+  d="$BATS_TEST_TMPDIR/bk"
+  mkdir -p "$d"
+  now=1700000000
+  printf '%s' "$now" > "$d/timestamp.txt"
+  printf 'linux 6.10.1-1\n' > "$d/kernel-packages.txt"
+  run backup_grub_state_staleness_warning "$d" "$now" 30 $'linux 6.11.0-1\n'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Kernel packages have changed"* ]]
+}
+
+@test "backup_grub_state_staleness_warning: nothing to warn about when there is no recorded timestamp (older backup format)" {
+  d="$BATS_TEST_TMPDIR/bk"
+  mkdir -p "$d"
+  run backup_grub_state_staleness_warning "$d" "1700000000" 30 ""
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+}
+
+@test "cmd_revert emits a staleness warning event when the backup is stale, without blocking the revert" {
+  export XSB_BACKUP_DIR="$BATS_TEST_TMPDIR/bk"
+  mkdir -p "$XSB_BACKUP_DIR"
+  printf 'grub\n' > "$XSB_BACKUP_DIR/packages.txt"
+  printf '%s' "1000000000" > "$XSB_BACKUP_DIR/timestamp.txt"
+  grub_backup_is_complete() { return 0; }
+  detect_bootloader() { echo "limine"; }
+  detect_secureboot_state() { echo "disabled"; }
+  find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR/esp"; }
+  mkdir -p "$BATS_TEST_TMPDIR/esp"
+  backup_grub_state_staleness_warning() { printf 'simulated staleness warning'; return 0; }
+  DRY_RUN=1
+  run cmd_revert
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"level":"warning"'*"simulated staleness warning"* ]]
+  [[ "$output" == *"revert_done"* ]]
 }
 
 @test "verify_grub_restored requires binary, config, AND firmware entry" {
@@ -129,4 +200,115 @@ setup() {
   [[ "$output" == *"Restoring your original GRUB configuration"* ]]
   [[ "$output" == *"Removing Limine"* ]]
   [[ "$output" == *"revert_done"* ]]
+}
+
+@test "cmd_revert runs a post-revert boot doctor check and includes it in the output" {
+  export XSB_BACKUP_DIR="$BATS_TEST_TMPDIR/bk"
+  mkdir -p "$XSB_BACKUP_DIR"
+  printf 'grub\n' > "$XSB_BACKUP_DIR/packages.txt"
+  grub_backup_is_complete() { return 0; }
+  detect_bootloader() { echo "limine"; }
+  detect_secureboot_state() { echo "disabled"; }
+  find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR/esp"; }
+  mkdir -p "$BATS_TEST_TMPDIR/esp"
+  is_uefi() { return 0; }
+  detect_partition_table() { return 0; }
+  efibootmgr() { printf 'Boot0000* XeroLinux\tHD(1,GPT,aaaa,0x800,0x100000)/File(\\EFI\\XeroLinux\\BOOTX64.EFI)\n'; }
+  export -f efibootmgr
+  DRY_RUN=1
+  run cmd_revert
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"doctor_check"* ]]
+  [[ "$output" == *"doctor_done"* ]]
+  [[ "$output" == *"revert_done"* ]]
+}
+
+@test "cmd_revert still reports success even when the post-revert doctor check finds a problem" {
+  export XSB_BACKUP_DIR="$BATS_TEST_TMPDIR/bk"
+  mkdir -p "$XSB_BACKUP_DIR"
+  printf 'grub\n' > "$XSB_BACKUP_DIR/packages.txt"
+  grub_backup_is_complete() { return 0; }
+  detect_bootloader() { echo "limine"; }
+  detect_secureboot_state() { echo "disabled"; }
+  find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR/esp"; }
+  mkdir -p "$BATS_TEST_TMPDIR/esp"
+  run_boot_doctor_checks() { emit_event "doctor_done" "error" "simulated doctor failure"; return 1; }
+  DRY_RUN=1
+  run cmd_revert
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"simulated doctor failure"* ]]
+  [[ "$output" == *"revert_done"* ]]
+}
+
+@test "cmd_revert clears Limine's leftover UEFI fallback binary, not just the bootloader-id path" {
+  # Regression test: migration also writes Limine's binary to the generic
+  # EFI/Boot/BOOTX64.EFI fallback path (deploy_limine_to_esp in migrate.sh),
+  # and remove_limine never cleans that path up. Without clearing it here
+  # too, firmware falling back to that path after Limine's NVRAM entry is
+  # removed loads Limine's now configless binary: an empty Limine menu, no
+  # way to reach GRUB, even though GRUB's own NVRAM entry is present.
+  export XSB_BACKUP_DIR="$BATS_TEST_TMPDIR/bk"
+  mkdir -p "$XSB_BACKUP_DIR"
+  printf 'grub\n' > "$XSB_BACKUP_DIR/packages.txt"
+  grub_backup_is_complete() { return 0; }
+  detect_bootloader() { echo "limine"; }
+  detect_secureboot_state() { echo "disabled"; }
+  find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR/esp"; }
+  mkdir -p "$BATS_TEST_TMPDIR/esp/EFI/Boot"
+  : > "$BATS_TEST_TMPDIR/esp/EFI/Boot/BOOTX64.EFI"
+  detect_other_os() { echo ""; }
+  DRY_RUN=1
+  run cmd_revert
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Clearing Limine's leftover UEFI fallback binary"* ]]
+  [[ "$output" == *"rm -f $BATS_TEST_TMPDIR/esp/EFI/Boot/BOOTX64.EFI"* ]]
+}
+
+@test "cmd_revert does not touch the fallback path when nothing is there or a real non-Windows OS owns it" {
+  export XSB_BACKUP_DIR="$BATS_TEST_TMPDIR/bk"
+  mkdir -p "$XSB_BACKUP_DIR"
+  printf 'grub\n' > "$XSB_BACKUP_DIR/packages.txt"
+  grub_backup_is_complete() { return 0; }
+  detect_bootloader() { echo "limine"; }
+  detect_secureboot_state() { echo "disabled"; }
+  find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR/esp"; }
+  mkdir -p "$BATS_TEST_TMPDIR/esp/EFI/Boot"
+  : > "$BATS_TEST_TMPDIR/esp/EFI/Boot/BOOTX64.EFI"
+  detect_other_os() { echo "openSUSE Tumbleweed"; }
+  DRY_RUN=1
+  run cmd_revert
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Clearing Limine's leftover UEFI fallback binary"* ]]
+  [ -e "$BATS_TEST_TMPDIR/esp/EFI/Boot/BOOTX64.EFI" ]
+
+  detect_other_os() { echo ""; }
+  rm "$BATS_TEST_TMPDIR/esp/EFI/Boot/BOOTX64.EFI"
+  run cmd_revert
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Clearing Limine's leftover UEFI fallback binary"* ]]
+}
+
+@test "cmd_revert aborts without touching Limine when clearing the fallback binary fails" {
+  export XSB_BACKUP_DIR="$BATS_TEST_TMPDIR/bk"
+  mkdir -p "$XSB_BACKUP_DIR"
+  printf 'grub\n' > "$XSB_BACKUP_DIR/packages.txt"
+  grub_backup_is_complete() { return 0; }
+  detect_bootloader() { echo "limine"; }
+  detect_secureboot_state() { echo "disabled"; }
+  find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR/esp"; }
+  mkdir -p "$BATS_TEST_TMPDIR/esp/EFI/Boot"
+  : > "$BATS_TEST_TMPDIR/esp/EFI/Boot/BOOTX64.EFI"
+  detect_other_os() { echo ""; }
+  remove_limine() { echo "SHOULD_NOT_BE_CALLED"; }
+  run_cmd() {
+    if [[ "$*" == *"rm -f"*"BOOTX64.EFI"* ]]; then
+      return 1
+    fi
+    emit_event "would_run" "info" "$*"
+  }
+  DRY_RUN=0
+  run cmd_revert
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Failed to clear Limine's leftover fallback binary"* ]]
+  [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
 }

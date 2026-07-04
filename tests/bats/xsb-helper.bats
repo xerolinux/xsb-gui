@@ -41,6 +41,10 @@ EOF
   : > "$BATS_TEST_TMPDIR/boot/efi/EFI/XeroLinux/BOOTX64.EFI"
   printf 'timeout: 5\ndefault_entry: 1\n\n/XeroLinux\n    protocol: linux\n    kernel_path: boot():/vmlinuz-linux\n' \
     > "$BATS_TEST_TMPDIR/boot/efi/limine.conf"
+  # verify_limine_conf_has_kernel_entry now also confirms the referenced
+  # kernel file actually exists on the ESP, not just that the config text
+  # mentions it - so the fixture needs a real file at that path too.
+  : > "$BATS_TEST_TMPDIR/boot/efi/vmlinuz-linux"
   export PATH="$STUB_BIN:$PATH"
 }
 
@@ -77,8 +81,12 @@ run_xsb_helper() {
 }
 
 @test "xsb-helper preflight emits a preflight_result line" {
-  mkdir -p /tmp/xsb-fake-efi 2>/dev/null || true
-  run "${BATS_TEST_DIRNAME}/../../xsb-helper" preflight
+  # Runs inside run_xsb_helper's sandboxed /boot + stubbed lsblk/findmnt
+  # rather than directly against the real host: the real host's /boot/efi
+  # is root-only (permission denied for the test user), which would make
+  # GPT detection fail here for reasons that never apply in production
+  # (xsb-helper always runs as root via pkexec).
+  run run_xsb_helper preflight
   [ "$status" -eq 0 ]
   [[ "$output" == *'"event":"preflight_result"'* ]]
 }
@@ -115,4 +123,13 @@ run_xsb_helper() {
   [[ "$output" == *"would_run"* ]]
   [[ "$output" == *"/usr/bin/rm -rf /var/lib/sbctl /usr/share/secureboot"* ]]
   [[ "$output" == *"reset_keys_done"* ]]
+}
+
+@test "xsb-helper doctor reports a healthy system on the fixture ESP" {
+  mkdir -p "$BATS_TEST_TMPDIR/boot/efi/EFI/Boot"
+  cp "$BATS_TEST_TMPDIR/boot/efi/EFI/XeroLinux/BOOTX64.EFI" "$BATS_TEST_TMPDIR/boot/efi/EFI/Boot/BOOTX64.EFI"
+  run run_xsb_helper doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"event":"doctor_done"'* ]]
+  [[ "$output" == *'"level":"ok"'* ]]
 }

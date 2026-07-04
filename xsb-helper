@@ -13,6 +13,7 @@ source "$LIB_DIR/chainload.sh"
 source "$LIB_DIR/migrate.sh"
 source "$LIB_DIR/secureboot.sh"
 source "$LIB_DIR/revert.sh"
+source "$LIB_DIR/doctor.sh"
 
 DRY_RUN=0
 subcommand="${1-}"
@@ -31,6 +32,7 @@ case "$subcommand" in
     enable-secureboot) cmd_enable_secureboot ;;
     reset-keys) cmd_reset_secureboot_keys ;;
     status) cmd_status ;;
+    doctor) cmd_doctor ;;
     *)
         emit_event "error" "error" "Unknown subcommand: $subcommand"
         exit 1

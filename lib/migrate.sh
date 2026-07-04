@@ -206,9 +206,35 @@ verify_limine_deployed() {
     [[ -f "${esp_mountpoint}/EFI/XeroLinux/BOOTX64.EFI" ]]
 }
 
+# Confirms limine.conf both references a protocol:linux kernel entry AND
+# that the kernel file it actually points at exists on the ESP. A textual
+# "protocol: linux" match alone (the original check) doesn't prove the
+# kernel it references is really there - it would let GRUB be removed atop
+# a limine.conf pointing at a missing/never-copied kernel image, leaving an
+# unbootable system with neither bootloader able to load a kernel.
 verify_limine_conf_has_kernel_entry() {
     local path="${1-/boot/efi/limine.conf}"
-    grep -q 'protocol:[[:space:]]*linux' "$path" 2>/dev/null
+    local esp_mountpoint="${2-$(dirname "$path")}"
+    grep -q 'protocol:[[:space:]]*linux' "$path" 2>/dev/null || return 1
+
+    # Anchored so this only matches "path:"/"kernel_path:" at the start of
+    # the line (after optional whitespace) - unanchored would also match
+    # "module_path:" (the initramfs entry, a different CONFIG.md option)
+    # since it contains "path:" as a substring.
+    local line p kernel_relpath=""
+    while IFS= read -r line; do
+        p="${line#*boot():}"
+        p="${p%%#*}"
+        p="${p#"${p%%[![:space:]]*}"}"
+        p="${p%"${p##*[![:space:]]}"}"
+        if [[ -n "$p" ]]; then
+            kernel_relpath="$p"
+            break
+        fi
+    done < <(grep -E '^[[:space:]]*(kernel_)?path:[[:space:]]*boot\(\):' "$path" 2>/dev/null)
+
+    [[ -z "$kernel_relpath" ]] && return 1
+    [[ -f "${esp_mountpoint}${kernel_relpath}" ]]
 }
 
 register_efi_boot_entry() {
@@ -226,12 +252,32 @@ verify_limine_entry() {
     grep -qi 'XeroLinux.*BOOTX64\.EFI' <<< "$efibootmgr_output"
 }
 
+# Matches by loader path relative to the ESP root (e.g. \EFI\opensuse\grubx64.efi),
+# not by NVRAM label: the label comes from whatever bootloader-id the
+# ORIGINAL installer used, which is very rarely literally "XeroLinux" in
+# practice, so a fixed-label match silently failed to find (and thus never
+# removed) almost any real pre-existing GRUB entry. Matching by exact path
+# also avoids the opposite risk of a bare "any grubx64.efi" match deleting
+# an unrelated OS's GRUB entry in a dual-boot setup: only paths remove_grub
+# actually found on THIS system's ESP (grub_efi_paths, one per line,
+# relative to the ESP root) are ever considered.
 find_grub_efi_bootnum() {
     local efibootmgr_output="${1-$(efibootmgr -v 2>/dev/null)}"
-    # No GRUB entry is a normal outcome, not a failure - grep exits
-    # nonzero on no match, which would trip pipefail otherwise. Always
-    # succeed; empty result means nothing to delete.
-    grep -iE 'XeroLinux.*grubx64\.efi' <<< "$efibootmgr_output" | grep -oE '^Boot[0-9A-Fa-f]{4}' | head -1 | sed 's/^Boot//' || true
+    local grub_efi_paths="${2-}"
+    [[ -z "$grub_efi_paths" ]] && return 0
+    local relpath winpath bootnum
+    while IFS= read -r relpath; do
+        [[ -z "$relpath" ]] && continue
+        winpath="${relpath//\//\\}"
+        # No match is a normal outcome, not a failure - grep exits
+        # nonzero on no match, which would trip pipefail otherwise.
+        bootnum="$(grep -iF "$winpath" <<< "$efibootmgr_output" | grep -oE '^Boot[0-9A-Fa-f]{4}' | head -1 | sed 's/^Boot//')" || true
+        if [[ -n "$bootnum" ]]; then
+            printf '%s' "$bootnum"
+            return 0
+        fi
+    done <<< "$grub_efi_paths"
+    return 0
 }
 
 # GRUB's EFI binary/config live under an unknown bootloader-id directory
@@ -284,9 +330,21 @@ remove_grub() {
     fi
     run_cmd /usr/bin/rm -rf /boot/grub
     run_cmd /usr/bin/rm -f /etc/default/grub
+
+    # Captured BEFORE remove_grub_efi_leftovers deletes the files below, so
+    # find_grub_efi_bootnum can match the NVRAM entry by this system's real
+    # GRUB loader path(s) instead of a guessed label.
+    local grub_efi_paths=""
+    [[ -d "${esp_mountpoint}/EFI" ]] && \
+        grub_efi_paths="$(find "${esp_mountpoint}/EFI" -iname 'grubx64.efi' 2>/dev/null | sed "s#^${esp_mountpoint}##")"
+
     remove_grub_efi_leftovers "$esp_mountpoint"
     local grub_bootnum
-    grub_bootnum="$(find_grub_efi_bootnum)"
+    # NOTE: efibootmgr output must be resolved and passed explicitly here,
+    # not left to find_grub_efi_bootnum's own "${1-default}" - passing an
+    # explicit "" instead would be treated as a provided (empty) value, not
+    # "unset", and its own default would never actually run.
+    grub_bootnum="$(find_grub_efi_bootnum "$(efibootmgr -v 2>/dev/null)" "$grub_efi_paths")"
     if [[ -n "$grub_bootnum" ]]; then
         run_cmd /usr/bin/efibootmgr -b "$grub_bootnum" -B
     fi
@@ -596,6 +654,13 @@ cmd_migrate() {
     # Best-effort: migration has already succeeded, so `|| true` keeps any
     # cleanup hiccup from turning a good migration into a reported failure.
     cleanup_after_migrate "$esp_mountpoint" || true
+
+    # Post-migration self-check: migration's own checks already verified
+    # Limine works, but this catches drift a narrower check wouldn't (e.g.
+    # a mismatched fallback binary) before the user reboots into it. Purely
+    # informational - `|| true` because a finding here must never turn an
+    # already-successful migration into a reported failure.
+    run_boot_doctor_checks || true
 
     emit_event "migrate_done" "info" "Migration to Limine complete."
 }

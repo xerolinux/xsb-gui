@@ -339,3 +339,108 @@ setup() {
   [[ "$output" != *"reset_keys_done"* ]]
   [[ "$output" != *"SHOULD_NOT_BE_CALLED"* ]]
 }
+
+@test "configure_fwupd_secureboot does nothing when fwupd's UEFI binary is not present" {
+  fwupd_efi="$BATS_TEST_TMPDIR/does-not-exist/fwupdx64.efi"
+  fwupd_conf="$BATS_TEST_TMPDIR/fwupd.conf"
+  run_cmd() { echo "SHOULD_NOT_BE_CALLED"; }
+  result="$(configure_fwupd_secureboot "$fwupd_efi" "$fwupd_conf")"
+  [ -z "$result" ]
+}
+
+@test "configure_fwupd_secureboot signs the binary and adds DisableShimForSecureBoot under DRY_RUN" {
+  fwupd_efi="$BATS_TEST_TMPDIR/fwupdx64.efi"
+  fwupd_conf="$BATS_TEST_TMPDIR/fwupd.conf"
+  : > "$fwupd_efi"
+  DRY_RUN=1
+  result="$(configure_fwupd_secureboot "$fwupd_efi" "$fwupd_conf")"
+  [[ "$result" == *"Signing fwupd's UEFI update binary"* ]]
+  [[ "$result" == *"sbctl sign -s -o ${fwupd_efi}.signed ${fwupd_efi}"* ]]
+  [[ "$result" == *"DisableShimForSecureBoot=true"* ]]
+  [ ! -f "$fwupd_conf" ]
+}
+
+@test "configure_fwupd_secureboot really signs and appends config when not in DRY_RUN, restarting fwupd.service only if active" {
+  fwupd_efi="$BATS_TEST_TMPDIR/fwupdx64.efi"
+  fwupd_conf="$BATS_TEST_TMPDIR/fwupd.conf"
+  : > "$fwupd_efi"
+  DRY_RUN=0
+  run_cmd() { echo "RUN_CMD: $*"; }
+  systemctl() { [[ "$1" == "is-active" ]] && return 0; echo "SHOULD_NOT_REACH_HERE"; }
+  result="$(configure_fwupd_secureboot "$fwupd_efi" "$fwupd_conf")"
+  [[ "$result" == *"RUN_CMD: /usr/bin/sbctl sign -s -o ${fwupd_efi}.signed ${fwupd_efi}"* ]]
+  [[ "$result" == *"RUN_CMD: /usr/bin/systemctl restart fwupd.service"* ]]
+  grep -q "\[uefi_capsule\]" "$fwupd_conf"
+  grep -q "DisableShimForSecureBoot=true" "$fwupd_conf"
+}
+
+@test "configure_fwupd_secureboot does not restart fwupd.service when it is not active" {
+  fwupd_efi="$BATS_TEST_TMPDIR/fwupdx64.efi"
+  fwupd_conf="$BATS_TEST_TMPDIR/fwupd2.conf"
+  : > "$fwupd_efi"
+  DRY_RUN=0
+  run_cmd() { echo "RUN_CMD: $*"; }
+  systemctl() { return 1; }
+  result="$(configure_fwupd_secureboot "$fwupd_efi" "$fwupd_conf")"
+  [[ "$result" != *"systemctl restart"* ]]
+}
+
+@test "configure_fwupd_secureboot skips the config rewrite when DisableShimForSecureBoot is already active" {
+  fwupd_efi="$BATS_TEST_TMPDIR/fwupdx64.efi"
+  fwupd_conf="$BATS_TEST_TMPDIR/fwupd3.conf"
+  : > "$fwupd_efi"
+  printf '[uefi_capsule]\nDisableShimForSecureBoot=true\n' > "$fwupd_conf"
+  before="$(cat "$fwupd_conf")"
+  DRY_RUN=0
+  run_cmd() { echo "RUN_CMD: $*"; }
+  systemctl() { return 1; }
+  result="$(configure_fwupd_secureboot "$fwupd_efi" "$fwupd_conf")"
+  [[ "$result" != *"Configuring fwupd to trust"* ]]
+  [ "$(cat "$fwupd_conf")" = "$before" ]
+}
+
+@test "configure_fwupd_secureboot still adds the setting when the key is present but set to false or commented out" {
+  fwupd_efi="$BATS_TEST_TMPDIR/fwupdx64.efi"
+  fwupd_conf="$BATS_TEST_TMPDIR/fwupd5.conf"
+  : > "$fwupd_efi"
+  printf '[uefi_capsule]\n#DisableShimForSecureBoot=false\n' > "$fwupd_conf"
+  DRY_RUN=1
+  result="$(configure_fwupd_secureboot "$fwupd_efi" "$fwupd_conf")"
+  [[ "$result" == *"Configuring fwupd to trust the signed binary directly"* ]]
+  [[ "$result" == *"DisableShimForSecureBoot=true"* ]]
+}
+
+@test "configure_fwupd_secureboot is best-effort: a signing failure is logged but does not fail the function or touch the config" {
+  fwupd_efi="$BATS_TEST_TMPDIR/fwupdx64.efi"
+  fwupd_conf="$BATS_TEST_TMPDIR/fwupd4.conf"
+  : > "$fwupd_efi"
+  DRY_RUN=0
+  run_cmd() { return 1; }
+  run configure_fwupd_secureboot "$fwupd_efi" "$fwupd_conf"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Could not sign fwupd's UEFI binary"* ]]
+  [ ! -f "$fwupd_conf" ]
+}
+
+@test "cmd_enable_secureboot calls configure_fwupd_secureboot after successfully (re-)signing, on all three success paths" {
+  find_esp_mountpoint() { echo "/boot/efi"; }
+  choose_enroll_cmd() { echo "sbctl enroll-keys --microsoft"; }
+  sign_efi_and_kernels() { emit_event "would_run" "info" "sbctl sign-all"; }
+  configure_fwupd_secureboot() { emit_event "would_run" "info" "configure_fwupd_secureboot called"; }
+  DRY_RUN=1
+
+  detect_secureboot_state() { echo "enabled"; }
+  sbctl_keys_exist_locally() { return 0; }
+  result="$(cmd_enable_secureboot)"
+  [[ "$result" == *"configure_fwupd_secureboot called"* ]]
+
+  detect_secureboot_state() { echo "setup_mode"; }
+  keys_enrolled() { return 0; }
+  in_setup_mode() { return 0; }
+  result="$(cmd_enable_secureboot)"
+  [[ "$result" == *"configure_fwupd_secureboot called"* ]]
+
+  keys_enrolled() { return 1; }
+  result="$(cmd_enable_secureboot)"
+  [[ "$result" == *"configure_fwupd_secureboot called"* ]]
+}

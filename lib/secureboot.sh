@@ -61,6 +61,50 @@ sign_efi_and_kernels() {
     return "$any_failed"
 }
 
+# fwupd's UEFI capsule updater refuses to run under Secure Boot unless it
+# either chains through a real "shim" (which sbctl-based setups like this
+# tool's don't install) or is told to trust a self-signed binary directly.
+# Signing alone isn't enough: fwupd still requires shim by default even
+# with a valid fwupdx64.efi.signed present, unless DisableShimForSecureBoot
+# is explicitly set. Best-effort and silent when fwupd isn't installed -
+# this must never block the core Secure Boot setup that called it.
+configure_fwupd_secureboot() {
+    local fwupd_efi="${1-/usr/lib/fwupd/efi/fwupdx64.efi}"
+    local fwupd_conf="${2-/etc/fwupd/fwupd.conf}"
+
+    [[ -f "$fwupd_efi" ]] || return 0
+
+    emit_event "secureboot_step" "info" "Signing fwupd's UEFI update binary"
+    run_cmd /usr/bin/sbctl sign -s -o "${fwupd_efi}.signed" "$fwupd_efi" || {
+        emit_event "secureboot_step" "info" "Could not sign fwupd's UEFI binary; firmware updates via fwupd may not work until this is done manually."
+        return 0
+    }
+
+    # Matches only an ACTIVE true assignment, not just the key name
+    # appearing anywhere - a commented-out line or an explicit "=false"
+    # (e.g. from a prior manual attempt) would otherwise be mistaken for
+    # "already configured" and silently leave shim still required, which
+    # is the exact problem this whole function exists to fix.
+    if ! grep -qiE '^[[:space:]]*DisableShimForSecureBoot[[:space:]]*=[[:space:]]*true' "$fwupd_conf" 2>/dev/null; then
+        emit_event "secureboot_step" "info" "Configuring fwupd to trust the signed binary directly (no shim required)"
+        if [[ "${DRY_RUN:-0}" == "1" ]]; then
+            emit_event "would_run" "info" "append [uefi_capsule]/DisableShimForSecureBoot=true to $fwupd_conf"
+        else
+            # `|| true`: this whole function is called bare (unguarded) by
+            # design at its call site below, so errexit is fully active
+            # here - an unguarded write failure would abort the entire,
+            # already-successful Secure Boot flow instead of just skipping
+            # this best-effort fwupd step.
+            printf '\n[uefi_capsule]\nDisableShimForSecureBoot=true\n' >> "$fwupd_conf" || true
+        fi
+    fi
+
+    if systemctl is-active --quiet fwupd.service 2>/dev/null; then
+        run_cmd /usr/bin/systemctl restart fwupd.service || true
+    fi
+    return 0
+}
+
 cmd_enable_secureboot() {
     local state
     state="$(detect_secureboot_state)"
@@ -80,6 +124,7 @@ cmd_enable_secureboot() {
                 emit_event "error" "error" "Failed to sign EFI binaries/kernels. Secure Boot is already active; unsigned binaries may fail to boot on the next update."
                 return 1
             }
+            configure_fwupd_secureboot
             emit_event "secureboot_already_active" "info" "Secure Boot re-signing complete."
         else
             emit_event "secureboot_step" "info" "Keys already enrolled. Re-signing EFI binaries."
@@ -87,6 +132,7 @@ cmd_enable_secureboot() {
                 emit_event "error" "error" "Failed to sign EFI binaries/kernels. Do NOT enable Secure Boot in firmware yet; boot binaries are not signed."
                 return 1
             }
+            configure_fwupd_secureboot
             emit_event "secureboot_needs_reboot" "info" "Reboot into firmware setup and enable Secure Boot."
         fi
         return 0
@@ -124,6 +170,7 @@ cmd_enable_secureboot() {
         emit_event "error" "error" "Failed to sign EFI binaries/kernels. Do NOT enable Secure Boot in firmware yet; boot binaries are not signed."
         return 1
     }
+    configure_fwupd_secureboot
 
     emit_event "secureboot_needs_reboot" "info" "Secure Boot setup complete. Reboot into firmware settings and enable Secure Boot."
 }

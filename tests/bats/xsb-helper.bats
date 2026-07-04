@@ -113,6 +113,6 @@ run_xsb_helper() {
   run "${BATS_TEST_DIRNAME}/../../xsb-helper" reset-keys --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"would_run"* ]]
-  [[ "$output" == *"/usr/bin/rm -rf /usr/share/secureboot"* ]]
+  [[ "$output" == *"/usr/bin/rm -rf /var/lib/sbctl /usr/share/secureboot"* ]]
   [[ "$output" == *"reset_keys_done"* ]]
 }

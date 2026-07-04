@@ -24,9 +24,42 @@ keys_enrolled() {
     grep -q "Setup Mode:.*Disabled" <<< "$sbctl_status_output"
 }
 
+# Whether sbctl has a local key database it created (PK/KEK/db) - i.e. whether
+# an existing Secure Boot enrollment belongs to *this* tool and can be signed
+# against, versus an unrelated third-party enrollment we must not touch.
+#
+# This must NOT hardcode a single directory: modern sbctl keeps its keys in
+# /var/lib/sbctl, while old versions used /usr/share/secureboot. Probing only
+# the legacy path made this return false on machines this tool had actually set
+# up (their keys live in /var/lib/sbctl), so cmd_enable_secureboot wrongly
+# refused to re-sign and told users to wipe their firmware keys.
+#
+# Prefer sbctl's own machine-readable answer (`status --json` -> "installed"),
+# which is path-agnostic and always tracks wherever sbctl really stores keys.
+# Fall back to probing both the modern and legacy key directories only if the
+# JSON query is unavailable (e.g. an sbctl too old to support --json).
+#
+# Args (all optional, for testing):
+#   $1 - explicit keys dir; if given, ONLY this dir is checked
+#   $2 - pre-captured `sbctl status --json` output
 sbctl_keys_exist_locally() {
-    local keys_dir="${1-/usr/share/secureboot/keys}"
-    [[ -d "$keys_dir" ]]
+    local explicit_dir="${1-}"
+    if [[ -n "$explicit_dir" ]]; then
+        [[ -d "$explicit_dir" ]]
+        return
+    fi
+
+    local status_json="${2-$(sbctl status --json 2>/dev/null)}"
+    if [[ -n "$status_json" ]]; then
+        grep -qE '"installed"[[:space:]]*:[[:space:]]*true' <<< "$status_json"
+        return
+    fi
+
+    local d
+    for d in /var/lib/sbctl/keys /usr/share/secureboot/keys; do
+        [[ -d "$d" ]] && return 0
+    done
+    return 1
 }
 
 choose_enroll_cmd() {
@@ -41,22 +74,37 @@ choose_enroll_cmd() {
     fi
 }
 
-sign_efi_and_kernels() {
+# Signs the UEFI binaries that firmware actually verifies against db: the
+# Limine loader, the generic fallback BOOTX64.EFI, and fwupd's ESP updater.
+#
+# It deliberately does NOT sign Linux kernels. Limine boots the kernel via its
+# `linux` protocol, loading it from the ESP by a BLAKE2B hash pinned in
+# limine.conf, and never consults a UEFI signature (verified on real SB
+# hardware: the machine boots with an unsigned ESP kernel). Signing a kernel
+# is therefore dead work, and signing the ESP copy in place would change its
+# bytes and break limine's pinned hash - an unbootable system. The Secure Boot
+# trust chain stays intact through the signed loader:
+#   firmware --(db)--> limine_x64.efi --> Limine --(hash)--> kernel.
+# Any kernels a prior version of this tool signed are untracked here so the
+# sbctl pacman hook stops re-signing them.
+#
+# Callers use `sign_efi_binaries ... || {...}`, which suspends errexit for
+# this whole function body (same quirk as remove_grub in migrate.sh), so
+# per-file failures are tracked explicitly rather than masked by a later
+# run_cmd succeeding.
+sign_efi_binaries() {
     local esp_dir="$1"
     local efi_file kernel_file
-    # Callers use `sign_efi_and_kernels ... || {...}`, which suspends
-    # errexit for this whole function body (see remove_grub in migrate.sh
-    # for the same quirk). Without tracking failures explicitly, one file
-    # failing to sign would be masked by a later file succeeding, since
-    # the function's exit status would just reflect the last run_cmd call.
     local any_failed=0
     while IFS= read -r efi_file; do
         [[ -z "$efi_file" ]] && continue
         run_cmd /usr/bin/sbctl sign -s "$efi_file" || any_failed=1
     done < <(find "$esp_dir" -name '*.efi' -o -iname '*.EFI' 2>/dev/null)
+    # Best-effort untrack: a kernel that was never tracked makes remove-file a
+    # harmless no-op, so this must not affect the signing success status.
     for kernel_file in /boot/vmlinuz-*; do
         [[ -f "$kernel_file" ]] || continue
-        run_cmd /usr/bin/sbctl sign -s "$kernel_file" || any_failed=1
+        run_cmd /usr/bin/sbctl remove-file "$kernel_file" || true
     done
     return "$any_failed"
 }
@@ -177,7 +225,10 @@ cmd_enable_secureboot() {
 
 cmd_reset_secureboot_keys() {
     emit_event "secureboot_step" "info" "Clearing local Secure Boot key database"
-    run_cmd /usr/bin/rm -rf /usr/share/secureboot || {
+    # Clear both the modern (/var/lib/sbctl) and legacy (/usr/share/secureboot)
+    # sbctl key locations. Removing only the legacy path was a silent no-op on
+    # current sbctl, leaving the real key database in /var/lib/sbctl intact.
+    run_cmd /usr/bin/rm -rf /var/lib/sbctl /usr/share/secureboot || {
         emit_event "error" "error" "Failed to clear local Secure Boot keys."
         return 1
     }

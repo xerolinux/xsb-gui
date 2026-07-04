@@ -1,7 +1,7 @@
 # Maintainer: DarkXero <info@xerolinux.xyz>
 pkgname=xsb-gui
-pkgver=0.1.3
-pkgrel=2
+pkgver=0.1.4
+pkgrel=1
 pkgdesc="XeroLinux Limine/SecureBoot Enabler"
 arch=('x86_64')
 url="https://github.com/xerolinux/xsb-gui"

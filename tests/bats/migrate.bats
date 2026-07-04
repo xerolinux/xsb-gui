@@ -931,3 +931,118 @@ stub_cmd_migrate_happy_path() {
   grep -q "/usr/bin/cp /usr/share/wallpapers/Xero-Plasma4.png $BATS_TEST_TMPDIR/splash.png" "$run_cmd_args_file"
   [ "$(cat "$write_limine_splash_args_file")" = "$BATS_TEST_TMPDIR/limine.conf" ]
 }
+
+# --- Post-migration cleanup ---
+
+@test "cleanup_orphaned_esp_kernels keeps referenced kernels and removes unreferenced ones" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  mid=b7c2a46f0a084a7d89b7f96a4784b975
+  old=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  mkdir -p "$esp/$mid/linux" "$esp/$old/linux"
+  echo k > "$esp/$mid/linux/vmlinuz-linux"
+  echo i > "$esp/$mid/linux/initramfs-linux"
+  echo oldk > "$esp/$old/linux/vmlinuz-linux"
+  {
+    echo "    module_path: boot():/$mid/linux/initramfs-linux#abc"
+    echo "    path: boot():/$mid/linux/vmlinuz-linux#def"
+  } > "$esp/limine.conf"
+  run cleanup_orphaned_esp_kernels "$esp"
+  [ "$status" -eq 0 ]
+  [ -f "$esp/$mid/linux/vmlinuz-linux" ]
+  [ -f "$esp/$mid/linux/initramfs-linux" ]
+  [ ! -e "$esp/$old/linux/vmlinuz-linux" ]
+  [ ! -d "$esp/$old" ]
+}
+
+@test "cleanup_orphaned_esp_kernels SAFETY: deletes nothing when limine.conf references no kernels" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  mid=b7c2a46f0a084a7d89b7f96a4784b975
+  mkdir -p "$esp/$mid/linux"
+  echo k > "$esp/$mid/linux/vmlinuz-linux"
+  echo "# no path lines here" > "$esp/limine.conf"
+  run cleanup_orphaned_esp_kernels "$esp"
+  [ "$status" -eq 0 ]
+  [ -f "$esp/$mid/linux/vmlinuz-linux" ]
+  [[ "$output" == *"Skipping ESP kernel prune"* ]]
+}
+
+@test "cleanup_orphaned_esp_kernels ignores non machine-id dirs (EFI, loader)" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  mid=b7c2a46f0a084a7d89b7f96a4784b975
+  mkdir -p "$esp/$mid/linux" "$esp/EFI/limine" "$esp/loader"
+  echo k > "$esp/$mid/linux/vmlinuz-linux"
+  echo x > "$esp/EFI/limine/limine_x64.efi"
+  echo r > "$esp/loader/random-seed"
+  printf '    path: boot():/%s/linux/vmlinuz-linux#h\n' "$mid" > "$esp/limine.conf"
+  run cleanup_orphaned_esp_kernels "$esp"
+  [ "$status" -eq 0 ]
+  [ -f "$esp/EFI/limine/limine_x64.efi" ]
+  [ -f "$esp/loader/random-seed" ]
+}
+
+@test "cleanup_orphaned_esp_kernels previews without deleting under DRY_RUN" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  mid=b7c2a46f0a084a7d89b7f96a4784b975
+  old=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  mkdir -p "$esp/$mid/linux" "$esp/$old/linux"
+  echo k > "$esp/$mid/linux/vmlinuz-linux"
+  echo oldk > "$esp/$old/linux/vmlinuz-linux"
+  printf '    path: boot():/%s/linux/vmlinuz-linux#h\n' "$mid" > "$esp/limine.conf"
+  DRY_RUN=1
+  run cleanup_orphaned_esp_kernels "$esp"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"would_run"* ]]
+  [[ "$output" == *"rm -f $esp/$old/linux/vmlinuz-linux"* ]]
+  [ -f "$esp/$old/linux/vmlinuz-linux" ]
+}
+
+@test "cleanup_bootloader_backups removes limine.conf.old and *.bak but keeps the live binary" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  mkdir -p "$esp/EFI/limine"
+  echo old > "$esp/limine.conf.old"
+  echo bak > "$esp/EFI/limine/limine_x64.bak"
+  echo keep > "$esp/EFI/limine/limine_x64.efi"
+  run cleanup_bootloader_backups "$esp"
+  [ "$status" -eq 0 ]
+  [ ! -e "$esp/limine.conf.old" ]
+  [ ! -e "$esp/EFI/limine/limine_x64.bak" ]
+  [ -f "$esp/EFI/limine/limine_x64.efi" ]
+}
+
+@test "cleanup_old_bootloader_leftovers removes an unused systemd-boot loader dir" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  mkdir -p "$esp/loader"
+  echo r > "$esp/loader/random-seed"
+  run cleanup_old_bootloader_leftovers "$esp"
+  [ "$status" -eq 0 ]
+  [ ! -d "$esp/loader" ]
+}
+
+@test "cleanup_old_bootloader_leftovers SAFETY: keeps loader dir when systemd-boot IS deployed" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  mkdir -p "$esp/loader" "$esp/EFI/systemd"
+  echo r > "$esp/loader/random-seed"
+  : > "$esp/EFI/systemd/systemd-bootx64.efi"
+  run cleanup_old_bootloader_leftovers "$esp"
+  [ "$status" -eq 0 ]
+  [ -d "$esp/loader" ]
+}
+
+@test "cleanup_old_bootloader_leftovers removes an empty leftover GRUB EFI dir" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  mkdir -p "$esp/EFI/grub"
+  run cleanup_old_bootloader_leftovers "$esp"
+  [ "$status" -eq 0 ]
+  [ ! -d "$esp/EFI/grub" ]
+}
+
+@test "cleanup_after_migrate runs all passes, emits a step event, and returns success" {
+  esp="$BATS_TEST_TMPDIR/esp"
+  mkdir -p "$esp/EFI/limine"
+  echo old > "$esp/limine.conf.old"
+  printf '    path: boot():/somewhere#h\n' > "$esp/limine.conf"
+  run cleanup_after_migrate "$esp"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Cleaning up leftover boot files"* ]]
+  [ ! -e "$esp/limine.conf.old" ]
+}

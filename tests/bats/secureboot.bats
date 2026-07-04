@@ -63,6 +63,20 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
+@test "sbctl_keys_exist_locally true when sbctl status --json reports installed" {
+  # Version-robust path: modern sbctl keeps its keys in /var/lib/sbctl, not
+  # the legacy /usr/share/secureboot. Asking sbctl itself avoids the stale
+  # hardcoded path that wrongly reported "not by this tool" on machines this
+  # tool had actually set up.
+  run sbctl_keys_exist_locally "" '{"installed": true, "guid": "x", "setup_mode": false, "secure_boot": true}'
+  [ "$status" -eq 0 ]
+}
+
+@test "sbctl_keys_exist_locally false when sbctl status --json reports not installed" {
+  run sbctl_keys_exist_locally "" '{"installed": false, "guid": "", "setup_mode": true, "secure_boot": false}'
+  [ "$status" -eq 1 ]
+}
+
 @test "choose_enroll_cmd avoids --firmware-builtin on ASUS boards" {
   result="$(choose_enroll_cmd "ASUSTeK COMPUTER INC." "1")"
   [ "$result" = "/usr/bin/sbctl enroll-keys --microsoft" ]
@@ -102,6 +116,11 @@ setup() {
 
 @test "cmd_enable_secureboot refuses when not in setup mode and keys not enrolled" {
   detect_secureboot_state() { echo "disabled"; }
+  # Stub these so the test is hermetic: without them the real keys_enrolled /
+  # in_setup_mode call live sbctl, so on a machine that already has Secure Boot
+  # enrolled the test takes the wrong branch and fails.
+  keys_enrolled() { return 1; }
+  in_setup_mode() { return 1; }
   run cmd_enable_secureboot
   [ "$status" -ne 0 ]
   [[ "$output" == *"Setup Mode"* ]]
@@ -287,7 +306,7 @@ setup() {
   DRY_RUN=1
   result="$(cmd_reset_secureboot_keys)"
   [[ "$result" == *"would_run"* ]]
-  [[ "$result" == *"/usr/bin/rm -rf /usr/share/secureboot"* ]]
+  [[ "$result" == *"/usr/bin/rm -rf /var/lib/sbctl /usr/share/secureboot"* ]]
 }
 
 @test "cmd_reset_secureboot_keys tells the user to run enable-secureboot when firmware is in Setup Mode" {
@@ -325,7 +344,7 @@ setup() {
 
 @test "cmd_reset_secureboot_keys emits an explicit error event and stops when clearing local keys fails" {
   run_cmd() {
-    if [[ "$1" == "/usr/bin/rm" && "$2" == "-rf" && "$3" == "/usr/share/secureboot" ]]; then
+    if [[ "$1" == "/usr/bin/rm" && "$2" == "-rf" && "$3" == "/var/lib/sbctl" ]]; then
       return 1
     fi
     emit_event "would_run" "info" "$*"

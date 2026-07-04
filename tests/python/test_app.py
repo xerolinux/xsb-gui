@@ -6,7 +6,7 @@ from PyQt6.QtGui import QCloseEvent
 from xsb_gui import app as app_module
 from xsb_gui.app import HELPER_PATH, build_wizard
 from xsb_gui.pages.confirm_page import (
-    WELCOME_PAGE_ID, PREFLIGHT_PAGE_ID, CONFIRM_PAGE_ID, MIGRATE_PAGE_ID,
+    WELCOME_PAGE_ID, CONFIRM_PAGE_ID, MIGRATE_PAGE_ID,
     SECUREBOOT_PAGE_ID, DONE_PAGE_ID,
 )
 
@@ -14,7 +14,6 @@ from xsb_gui.pages.confirm_page import (
 def test_build_wizard_registers_all_pages_in_order(qapp):
     wizard = build_wizard()
     assert wizard.page(WELCOME_PAGE_ID) is not None
-    assert wizard.page(PREFLIGHT_PAGE_ID) is not None
     assert wizard.page(CONFIRM_PAGE_ID) is not None
     assert wizard.page(MIGRATE_PAGE_ID) is not None
     assert wizard.page(SECUREBOOT_PAGE_ID) is not None

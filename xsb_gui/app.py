@@ -5,9 +5,8 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QWizard
 
 from xsb_gui.pages.welcome_page import WelcomePage
-from xsb_gui.pages.preflight_page import PreflightPage
 from xsb_gui.pages.confirm_page import (
-    ConfirmPage, WELCOME_PAGE_ID, PREFLIGHT_PAGE_ID, CONFIRM_PAGE_ID,
+    ConfirmPage, WELCOME_PAGE_ID, CONFIRM_PAGE_ID,
     MIGRATE_PAGE_ID, SECUREBOOT_PAGE_ID, DONE_PAGE_ID, SECUREBOOT_ERROR_PAGE_ID,
 )
 from xsb_gui.pages.migrate_page import MigratePage
@@ -58,8 +57,7 @@ def build_wizard(helper_path=HELPER_PATH, use_pkexec=True):
         wizard.setWindowIcon(icon)
         wizard.setPixmap(QWizard.WizardPixmap.LogoPixmap, icon.pixmap(48, 48))
     wizard.setPage(WELCOME_PAGE_ID, WelcomePage(helper_path=helper_path, use_pkexec=use_pkexec))
-    wizard.setPage(PREFLIGHT_PAGE_ID, PreflightPage(helper_path=helper_path, use_pkexec=use_pkexec))
-    wizard.setPage(CONFIRM_PAGE_ID, ConfirmPage())
+    wizard.setPage(CONFIRM_PAGE_ID, ConfirmPage(helper_path=helper_path, use_pkexec=use_pkexec))
     wizard.setPage(MIGRATE_PAGE_ID, MigratePage(helper_path=helper_path, use_pkexec=use_pkexec))
     wizard.setPage(SECUREBOOT_PAGE_ID, SecureBootPage(helper_path=helper_path, use_pkexec=use_pkexec))
     wizard.setPage(SECUREBOOT_ERROR_PAGE_ID, SecureBootErrorPage())

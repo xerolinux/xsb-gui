@@ -19,8 +19,16 @@ grub_backup_is_complete() {
 }
 
 # Bootloader-id GRUB was registered under, parsed from the backed-up efibootmgr
-# line ("BootXXXX* <label>\tHD(...)"). Defaults to GRUB when unknown so a
-# reinstall still gets a sane, non-empty --bootloader-id.
+# line ("BootXXXX* <label>\tHD(...)"). In the normal case this correctly
+# preserves whatever the ORIGINAL install actually used - on a machine set
+# up by XeroLinux's own installer, that's typically "XeroLinux" itself
+# (see the real NVRAM-collision incident this file's remove_limine already
+# had to account for). The literal fallback below is used ONLY if the
+# backup capture genuinely failed/was empty (e.g. an interrupted or very
+# old backup) - deliberately "Xero-Linux" (hyphenated), not "GRUB" and not
+# an exact "XeroLinux" match, so it never collides in the firmware boot
+# menu with Limine's own hardcoded "XeroLinux" label (register_efi_boot_entry
+# in migrate.sh) even in this degraded, rarely-hit path.
 grub_bootloader_id_from_backup() {
     local backup_dir="${1-$XSB_BACKUP_DIR}"
     local line label=""
@@ -32,7 +40,7 @@ grub_bootloader_id_from_backup() {
         label="${label#"${label%%[![:space:]]*}"}"
         label="${label%"${label##*[![:space:]]}"}"
     fi
-    printf '%s' "${label:-GRUB}"
+    printf '%s' "${label:-Xero-Linux}"
 }
 
 # Records the current time and installed kernel packages into the backup
@@ -202,14 +210,24 @@ remove_limine() {
         [[ -n "$(find "$mid_dir" -maxdepth 2 -name 'vmlinuz-*' -print -quit 2>/dev/null)" ]] || continue
         run_cmd /usr/bin/rm -rf "$mid_dir"
     done
-    # Limine's firmware boot entry(ies). Loops over EVERY match, not just
-    # the first: real firmware can end up with more than one XeroLinux/
-    # Limine-labeled NVRAM entry (repeated runs, firmware quirks that
-    # duplicate entries rather than reusing them), and leaving any behind
-    # orphans it pointing at files just deleted above - producing a dead
-    # boot option that some firmware won't skip past on its own.
+    # Limine's firmware boot entry(ies), matched by loader path
+    # (\EFI\XeroLinux\BOOTX64.EFI - see register_efi_boot_entry in
+    # migrate.sh), NOT by NVRAM label. Real incident: the "XeroLinux" label
+    # is NOT unique to Limine - grub_bootloader_id_from_backup preserves
+    # whatever bootloader-id the ORIGINAL GRUB install used, which on a
+    # machine set up by XeroLinux's own installer is very often ALSO
+    # "XeroLinux". Matching by label previously (even before the
+    # loop-over-every-match fix) risked ambiguity, and the loop fix made it
+    # actively worse: it deleted GRUB's own freshly-created "XeroLinux"
+    # entry too, since it shares the same label - producing ZERO firmware
+    # boot entries and a device that boots straight to firmware setup.
+    # Loader path is unambiguous: Limine's is always BOOTX64.EFI under
+    # EFI/XeroLinux; GRUB's is always grubx64.efi under EFI/<bootloader-id>
+    # - they can never collide regardless of what label either uses.
+    # `efibootmgr -v` (not bare) is required here since only -v shows the
+    # loader path at all; bare efibootmgr only shows BootXXXX + label.
     local limine_bootnums bootnum
-    limine_bootnums="$(efibootmgr 2>/dev/null | grep -iE 'XeroLinux|Limine' | grep -oE '^Boot[0-9A-Fa-f]{4}' | sed 's/^Boot//')" || true
+    limine_bootnums="$(efibootmgr -v 2>/dev/null | grep -iF '\EFI\XeroLinux\BOOTX64.EFI' | grep -oE '^Boot[0-9A-Fa-f]{4}' | sed 's/^Boot//')" || true
     while IFS= read -r bootnum; do
         [[ -n "$bootnum" ]] && run_cmd /usr/bin/efibootmgr -b "$bootnum" -B
     done <<< "$limine_bootnums"
@@ -366,5 +384,15 @@ cmd_revert() {
     # revert into a reported failure.
     run_boot_doctor_checks || true
 
-    emit_event "revert_done" "info" "Revert complete. GRUB is restored; reboot to use it."
+    # DRY_RUN-aware: this whole function also runs as a preview (the GUI's
+    # RevertDialog starts with `revert --dry-run` automatically before the
+    # user ever clicks anything), and the OLD unconditional "Revert
+    # complete... reboot to use it" message showed up in that preview's own
+    # log too - confusingly implying it had already happened when nothing
+    # had been touched yet.
+    if [[ "${DRY_RUN:-0}" == "1" ]]; then
+        emit_event "revert_done" "info" "Clear to revert. Nothing has changed yet - press Apply Revert to complete the reversion to GRUB."
+    else
+        emit_event "revert_done" "info" "Revert complete. GRUB is restored; reboot to use it."
+    fi
 }

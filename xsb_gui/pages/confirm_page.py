@@ -1,21 +1,17 @@
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWizardPage
 
-from xsb_gui.parsing import build_summary_text
+from xsb_gui.esp_size_check import is_esp_too_small, show_esp_too_small_popup
+from xsb_gui.helper_runner import HelperRunner
+from xsb_gui.parsing import build_summary_text, parse_preflight_result
 
 WELCOME_PAGE_ID = 0
-PREFLIGHT_PAGE_ID = 1
-CONFIRM_PAGE_ID = 2
-MIGRATE_PAGE_ID = 3
-SECUREBOOT_PAGE_ID = 4
-DONE_PAGE_ID = 5
-SECUREBOOT_ERROR_PAGE_ID = 6
+CONFIRM_PAGE_ID = 1
+MIGRATE_PAGE_ID = 2
+SECUREBOOT_PAGE_ID = 3
+DONE_PAGE_ID = 4
+SECUREBOOT_ERROR_PAGE_ID = 5
 
-SECUREBOOT_ALREADY_ENABLED_WARNING = (
-    "Secure Boot is already enabled in your firmware. Migrating now would leave an "
-    "unsigned, unbootable Limine after reboot. Reboot into UEFI firmware settings and "
-    "disable Secure Boot first. This wizard will safely re-enable it at the end, "
-    "once Limine is properly signed."
-)
+CHECKING_TEXT = "Running checks..."
 
 RESUME_AT_SECUREBOOT_NOTICE = (
     "Limine is already installed and GRUB has been removed. The migration step will "
@@ -24,14 +20,25 @@ RESUME_AT_SECUREBOOT_NOTICE = (
 
 
 class ConfirmPage(QWizardPage):
-    def __init__(self, parent=None):
+    """Runs xsb-helper's preflight checks itself (merged from the former,
+    separate PreflightPage - one fewer page for the user to click through)
+    and shows the resulting summary. isComplete() blocks "Next" until a
+    result actually arrives; any hard-refusal from preflight itself (no
+    ESP, existing foreign Secure Boot keys, GRUB+Secure-Boot-already-on,
+    etc.) surfaces as the same summary text via the "error" event, with no
+    separate error path or warning label needed here.
+    """
+
+    def __init__(self, helper_path="/usr/lib/xsb-gui/xsb-helper", use_pkexec=True, parent=None):
         super().__init__(parent)
-        self.setTitle("Confirm migration")
-        self.setSubTitle("Review what will happen before continuing.")
+        self.setTitle("Checking your system")
+        self.setSubTitle("Detecting your current bootloader, partition layout, and Secure Boot state.")
+        self._helper_path = helper_path
+        self._use_pkexec = use_pkexec
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(14)
-        self.summary_label = QLabel("")
+        self.summary_label = QLabel(CHECKING_TEXT)
         self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
         self.resume_notice_label = QLabel(RESUME_AT_SECUREBOOT_NOTICE)
@@ -41,29 +48,91 @@ class ConfirmPage(QWizardPage):
         )
         self.resume_notice_label.setVisible(False)
         layout.addWidget(self.resume_notice_label)
-        self.secureboot_warning_label = QLabel(SECUREBOOT_ALREADY_ENABLED_WARNING)
-        self.secureboot_warning_label.setWordWrap(True)
-        self.secureboot_warning_label.setStyleSheet(
-            "background-color: #c0392b; color: white; border-radius: 12px; padding: 12px;"
-        )
-        self.secureboot_warning_label.setVisible(False)
-        layout.addWidget(self.secureboot_warning_label)
         layout.addStretch()
-        self._blocked = False
+
+        self.result = None
+        self._esp_too_small = False
         self._skip_migrate = False
+        self.runner = None
 
     def initializePage(self):
-        preflight_page = self.wizard().page(PREFLIGHT_PAGE_ID)
-        result = preflight_page.result
-        self._skip_migrate = result.bootloader == "limine"
-        self.summary_label.setText(build_summary_text(result, migrating=not self._skip_migrate))
-        self._blocked = result.secureboot_state == "enabled"
-        self.secureboot_warning_label.setVisible(self._blocked)
-        self.resume_notice_label.setVisible(self._skip_migrate)
+        self._stop_runner()
+        self.result = None
+        self._esp_too_small = False
+        self._skip_migrate = False
+        self.summary_label.setText(CHECKING_TEXT)
+        self.resume_notice_label.setVisible(False)
+        # Without this, re-entering the page (e.g. Back then Next) leaves
+        # the Next button stuck enabled from the PRIOR completed run until
+        # some later event happens to emit completeChanged - letting the
+        # user click through to MigratePage while self.result is still None.
+        self.completeChanged.emit()
+        self.runner = HelperRunner(helper_path=self._helper_path, use_pkexec=self._use_pkexec)
+        self.runner.event_received.connect(self._on_event)
+        self.runner.finished.connect(self._on_finished)
+        self.runner.error_occurred.connect(self._on_process_error)
+        self.runner.raw_output_received.connect(self._on_raw_output)
+        self.runner.start("preflight")
+
+    def cleanupPage(self):
+        # QWizard calls this when navigating away (e.g. Back). Stop any
+        # in-flight helper run so it can't keep running concurrently with
+        # a later re-entry.
+        self._stop_runner()
+
+    def _stop_runner(self):
+        """Stop the current runner (if any), detached from this page.
+
+        Disconnects signals first so a delayed emission from the process
+        being torn down isn't mistaken for state from a fresh run (e.g. a
+        stale preflight_result after Back then Next re-triggers this page).
+        """
+        if self.runner is None:
+            return
+        for signal, slot in (
+            (self.runner.event_received, self._on_event),
+            (self.runner.finished, self._on_finished),
+            (self.runner.error_occurred, self._on_process_error),
+            (self.runner.raw_output_received, self._on_raw_output),
+        ):
+            try:
+                signal.disconnect(slot)
+            except TypeError:
+                pass
+        self.runner.stop()
+
+    def _on_event(self, event):
+        event_name = event.get("event", "")
+        if event_name == "preflight_result":
+            self.result = parse_preflight_result(event)
+            if is_esp_too_small(self.result.esp_size_bytes):
+                self._esp_too_small = True
+                self.summary_label.setText("EFI system partition is too small.")
+                self.completeChanged.emit()
+                show_esp_too_small_popup(self, self.result.esp_size_bytes)
+                return
+            self._skip_migrate = self.result.bootloader == "limine"
+            self.summary_label.setText(build_summary_text(self.result, migrating=not self._skip_migrate))
+            self.resume_notice_label.setVisible(self._skip_migrate)
+            self.completeChanged.emit()
+        elif event_name == "error":
+            self.summary_label.setText(event.get("message", ""))
+            self.completeChanged.emit()
+
+    def _on_finished(self, _exit_code):
+        if self.result is None and self.summary_label.text() == CHECKING_TEXT:
+            self.summary_label.setText("Preflight checks did not complete.")
+            self.completeChanged.emit()
+
+    def _on_process_error(self, message):
+        self.summary_label.setText(message)
         self.completeChanged.emit()
 
+    def _on_raw_output(self, line):
+        self.summary_label.setText(f"{self.summary_label.text()}\n{line}")
+
     def isComplete(self):
-        return not self._blocked
+        return self.result is not None and not self._esp_too_small
 
     def nextId(self):
         if self._skip_migrate:

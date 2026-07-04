@@ -20,13 +20,16 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "grub_bootloader_id_from_backup parses the label and defaults to GRUB" {
+@test "grub_bootloader_id_from_backup parses the real label, and falls back to Xero-Linux (not GRUB, not XeroLinux) when capture failed" {
   d="$BATS_TEST_TMPDIR/bk"
   mkdir -p "$d"
   printf 'Boot0003* XeroLinux\tHD(1,GPT,x)/File(\\EFI\\XeroLinux\\grubx64.efi)\n' > "$d/nvram-grub.txt"
   [ "$(grub_bootloader_id_from_backup "$d")" = "XeroLinux" ]
   rm -f "$d/nvram-grub.txt"
-  [ "$(grub_bootloader_id_from_backup "$d")" = "GRUB" ]
+  # Hyphenated, deliberately: never collides in the firmware boot menu
+  # with Limine's own hardcoded "XeroLinux" label, and isn't the generic
+  # "GRUB" either.
+  [ "$(grub_bootloader_id_from_backup "$d")" = "Xero-Linux" ]
 }
 
 @test "backup_grub_state previews under DRY_RUN without writing anything" {
@@ -192,6 +195,29 @@ setup() {
   [[ "$result" != *"-b 0000"* ]]
 }
 
+@test "remove_limine does NOT delete GRUB's own NVRAM entry even when it shares Limine's 'XeroLinux' label (real incident regression)" {
+  # Root cause of a worse real incident: register_efi_boot_entry always
+  # labels Limine's entry "XeroLinux", and grub_bootloader_id_from_backup
+  # preserves whatever label the ORIGINAL GRUB install used - on a machine
+  # set up by XeroLinux's own installer, that's very often ALSO
+  # "XeroLinux". Matching Limine's entry by label text (rather than loader
+  # path) meant this function's own "remove every match" fix (the previous
+  # regression test above) ALSO deleted GRUB's freshly-created entry, since
+  # it shares that label - leaving ZERO firmware boot entries and a device
+  # that boots straight to firmware setup instead of GRUB.
+  esp="$BATS_TEST_TMPDIR/esp"
+  mkdir -p "$esp/EFI/XeroLinux"
+  DRY_RUN=0
+  efibootmgr() {
+    printf 'Boot0000* XeroLinux\tHD(1,GPT,aaaa)/File(\\EFI\\XeroLinux\\BOOTX64.EFI)\n'
+    printf 'Boot0001* XeroLinux\tHD(1,GPT,aaaa)/File(\\EFI\\opensuse\\grubx64.efi)\n'
+  }
+  run_cmd() { echo "RUN_CMD: $*"; }
+  result="$(remove_limine "$esp" "")"
+  [[ "$result" == *"RUN_CMD: /usr/bin/efibootmgr -b 0000 -B"* ]]
+  [[ "$result" != *"-b 0001"* ]]
+}
+
 @test "promote_grub_boot_order puts GRUB's bootnum first, keeping every other existing entry" {
   efibootmgr_v='Boot0003* GRUB\tHD(1,GPT,aaaa)/File(\EFI\opensuse\grubx64.efi)'
   current_order='0001,0002,0003'
@@ -288,7 +314,7 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"Reinstalling GRUB packages"* ]]
   [[ "$output" == *"Restoring your original GRUB configuration"* ]]
-  [[ "$output" == *"grub-install --target=x86_64-efi --efi-directory=$BATS_TEST_TMPDIR/esp --bootloader-id=GRUB --force --recheck"* ]]
+  [[ "$output" == *"grub-install --target=x86_64-efi --efi-directory=$BATS_TEST_TMPDIR/esp --bootloader-id=Xero-Linux --force --recheck"* ]]
   [[ "$output" == *"Generating GRUB configuration"* ]]
   [[ "$output" == *"grub-mkconfig -o /boot/grub/grub.cfg"* ]]
   [[ "$output" == *"Removing Limine"* ]]
@@ -296,6 +322,47 @@ setup() {
   # restore (config) happens before grub-install, since grub-install itself
   # reads /etc/default/grub at install time.
   [[ "$output" =~ "Restoring your original GRUB configuration".*"grub-install --target" ]]
+}
+
+@test "cmd_revert's final message is dry-run-aware: does not claim completion during a preview" {
+  # Regression: the RevertDialog GUI runs `revert --dry-run` automatically
+  # as its first, no-action-taken step, and the OLD unconditional "Revert
+  # complete... reboot to use it" message showed up in that preview's own
+  # log too - confusingly implying it had already happened before the user
+  # ever clicked Apply Revert.
+  export XSB_BACKUP_DIR="$BATS_TEST_TMPDIR/bk"
+  mkdir -p "$XSB_BACKUP_DIR"
+  printf 'grub\n' > "$XSB_BACKUP_DIR/packages.txt"
+  grub_backup_is_complete() { return 0; }
+  detect_bootloader() { echo "limine"; }
+  detect_secureboot_state() { echo "disabled"; }
+  find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR/esp"; }
+  mkdir -p "$BATS_TEST_TMPDIR/esp"
+
+  DRY_RUN=1
+  run cmd_revert
+  [[ "$output" == *"Clear to revert"* ]]
+  [[ "$output" == *"press Apply Revert"* ]]
+  [[ "$output" != *"Revert complete"* ]]
+}
+
+@test "cmd_revert's final message confirms completion for a real (non-dry-run) revert" {
+  export XSB_BACKUP_DIR="$BATS_TEST_TMPDIR/bk"
+  mkdir -p "$XSB_BACKUP_DIR"
+  printf 'grub\n' > "$XSB_BACKUP_DIR/packages.txt"
+  grub_backup_is_complete() { return 0; }
+  detect_bootloader() { echo "limine"; }
+  detect_secureboot_state() { echo "disabled"; }
+  find_esp_mountpoint() { echo "$BATS_TEST_TMPDIR/esp"; }
+  mkdir -p "$BATS_TEST_TMPDIR/esp"
+  run_cmd() { echo "RUN_CMD: $*"; }
+  efibootmgr() { echo ""; }
+  verify_grub_restored() { return 0; }
+
+  DRY_RUN=0
+  run cmd_revert
+  [[ "$output" == *"Revert complete. GRUB is restored; reboot to use it."* ]]
+  [[ "$output" != *"Clear to revert"* ]]
 }
 
 @test "cmd_revert reports a clear error and stops when grub-mkconfig fails" {

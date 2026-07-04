@@ -57,7 +57,7 @@ def build_wizard(helper_path=HELPER_PATH, use_pkexec=True):
         icon = QIcon(str(ICON_PATH))
         wizard.setWindowIcon(icon)
         wizard.setPixmap(QWizard.WizardPixmap.LogoPixmap, icon.pixmap(48, 48))
-    wizard.setPage(WELCOME_PAGE_ID, WelcomePage())
+    wizard.setPage(WELCOME_PAGE_ID, WelcomePage(helper_path=helper_path, use_pkexec=use_pkexec))
     wizard.setPage(PREFLIGHT_PAGE_ID, PreflightPage(helper_path=helper_path, use_pkexec=use_pkexec))
     wizard.setPage(CONFIRM_PAGE_ID, ConfirmPage())
     wizard.setPage(MIGRATE_PAGE_ID, MigratePage(helper_path=helper_path, use_pkexec=use_pkexec))

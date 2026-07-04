@@ -1,6 +1,8 @@
-from PyQt6.QtWidgets import QCheckBox, QLabel, QSizePolicy, QVBoxLayout, QWizardPage
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QCheckBox, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWizardPage
 
 from xsb_gui.widgets.marching_ants_frame import MarchingAntsFrame
+from xsb_gui.widgets.secureboot_status_dialog import SecureBootStatusDialog
 
 CAUTION_TEXT = (
     '<p align="center">⚠ USE AT YOUR OWN RISK ⚠</p>'
@@ -25,8 +27,10 @@ WARNING_TEXT = (
 
 
 class WelcomePage(QWizardPage):
-    def __init__(self, parent=None):
+    def __init__(self, helper_path="/usr/lib/xsb-gui/xsb-helper", use_pkexec=True, parent=None):
         super().__init__(parent)
+        self._helper_path = helper_path
+        self._use_pkexec = use_pkexec
         self.setTitle("XeroLinux Limine/SecureBoot Enabler")
         self.setSubTitle("Please read carefully before continuing.")
         layout = QVBoxLayout(self)
@@ -37,10 +41,17 @@ class WelcomePage(QWizardPage):
         label.setWordWrap(True)
         layout.addWidget(label)
 
-        layout.addStretch(2)
+        layout.addStretch(1)
 
         self.caution_label = MarchingAntsFrame(CAUTION_TEXT)
         layout.addWidget(self.caution_label)
+
+        layout.addSpacing(10)
+
+        self.check_status_button = QPushButton("Check SecureBoot Status")
+        self.check_status_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.check_status_button.clicked.connect(self._on_check_status_clicked)
+        layout.addWidget(self.check_status_button, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         layout.addStretch(3)
 
@@ -48,6 +59,10 @@ class WelcomePage(QWizardPage):
         self.understand_checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.understand_checkbox.toggled.connect(self.completeChanged)
         layout.addWidget(self.understand_checkbox)
+
+    def _on_check_status_clicked(self):
+        dialog = SecureBootStatusDialog(self._helper_path, self._use_pkexec, self)
+        dialog.exec()
 
     def isComplete(self):
         return self.understand_checkbox.isChecked()

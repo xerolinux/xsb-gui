@@ -54,7 +54,7 @@ def test_welcome_page_caution_pill_comes_after_the_explanation_paragraph(qtbot):
     assert widgets.index(page.caution_label) < widgets.index(page.understand_checkbox)
 
 
-def test_utility_buttons_sit_in_a_row_between_the_caution_pill_and_checkbox(qtbot):
+def test_utility_buttons_sit_in_two_rows_between_the_caution_pill_and_checkbox(qtbot):
     page = WelcomePage()
     qtbot.addWidget(page)
     layout = page.layout()
@@ -65,13 +65,16 @@ def test_utility_buttons_sit_in_a_row_between_the_caution_pill_and_checkbox(qtbo
             positions["caution"] = i
         elif w is page.understand_checkbox:
             positions["checkbox"] = i
-    row_idx = _row_index_containing(layout, page.check_status_button)
-    assert row_idx != -1
-    assert positions["caution"] < row_idx < positions["checkbox"]
-    # All utility buttons share the same row.
-    assert _row_index_containing(layout, page.cleanup_button) == row_idx
-    assert _row_index_containing(layout, page.revert_button) == row_idx
-    assert _row_index_containing(layout, page.doctor_button) == row_idx
+    top_row_idx = _row_index_containing(layout, page.check_status_button)
+    bottom_row_idx = _row_index_containing(layout, page.cleanup_button)
+    assert top_row_idx != -1
+    assert bottom_row_idx != -1
+    # Check SecureBoot Status is alone on its own row, above the other three.
+    assert top_row_idx != bottom_row_idx
+    assert positions["caution"] < top_row_idx < bottom_row_idx < positions["checkbox"]
+    # The other three utility buttons share the same (bottom) row.
+    assert _row_index_containing(layout, page.revert_button) == bottom_row_idx
+    assert _row_index_containing(layout, page.doctor_button) == bottom_row_idx
 
 
 def test_clicking_check_status_button_opens_the_status_dialog(qtbot):

@@ -130,13 +130,16 @@ reinstall_grub_packages() {
 restore_grub_files() {
     local backup_dir="${1-$XSB_BACKUP_DIR}"
     [[ -f "${backup_dir}/etc-default-grub" ]] && { run_cmd /usr/bin/cp -a "${backup_dir}/etc-default-grub" /etc/default/grub || return 1; }
-    # Restore the exact boot menu and saved-default state produced before
-    # migration, over whatever grub-install just laid down.
-    if [[ -f "${backup_dir}/boot-grub/grub.cfg" ]]; then
+    # Saved-default/boot-once state only - grub.cfg itself is NOT restored
+    # from backup here. A backed-up grub.cfg reflects whatever
+    # kernels/packages existed at migration time, which can be stale by the
+    # time of a revert (kernel updates, package changes since); it's
+    # regenerated fresh via grub-mkconfig in cmd_revert instead, which
+    # discovers whatever's actually installed right now.
+    if [[ -f "${backup_dir}/boot-grub/grubenv" ]]; then
         run_cmd /usr/bin/mkdir -p /boot/grub || return 1
-        run_cmd /usr/bin/cp -a "${backup_dir}/boot-grub/grub.cfg" /boot/grub/grub.cfg || return 1
+        run_cmd /usr/bin/cp -a "${backup_dir}/boot-grub/grubenv" /boot/grub/grubenv || return 1
     fi
-    [[ -f "${backup_dir}/boot-grub/grubenv" ]] && { run_cmd /usr/bin/cp -a "${backup_dir}/boot-grub/grubenv" /boot/grub/grubenv || return 1; }
     return 0
 }
 
@@ -182,10 +185,47 @@ remove_limine() {
         [[ -n "$(find "$mid_dir" -maxdepth 2 -name 'vmlinuz-*' -print -quit 2>/dev/null)" ]] || continue
         run_cmd /usr/bin/rm -rf "$mid_dir"
     done
-    # Limine's firmware boot entry.
-    local limine_bootnum
-    limine_bootnum="$(efibootmgr 2>/dev/null | grep -iE 'XeroLinux|Limine' | grep -oE '^Boot[0-9A-Fa-f]{4}' | head -1 | sed 's/^Boot//')" || true
-    [[ -n "$limine_bootnum" ]] && run_cmd /usr/bin/efibootmgr -b "$limine_bootnum" -B || true
+    # Limine's firmware boot entry(ies). Loops over EVERY match, not just
+    # the first: real firmware can end up with more than one XeroLinux/
+    # Limine-labeled NVRAM entry (repeated runs, firmware quirks that
+    # duplicate entries rather than reusing them), and leaving any behind
+    # orphans it pointing at files just deleted above - producing a dead
+    # boot option that some firmware won't skip past on its own.
+    local limine_bootnums bootnum
+    limine_bootnums="$(efibootmgr 2>/dev/null | grep -iE 'XeroLinux|Limine' | grep -oE '^Boot[0-9A-Fa-f]{4}' | sed 's/^Boot//')" || true
+    while IFS= read -r bootnum; do
+        [[ -n "$bootnum" ]] && run_cmd /usr/bin/efibootmgr -b "$bootnum" -B
+    done <<< "$limine_bootnums"
+    return 0
+}
+
+# Defense-in-depth against the same incident the loop above fixes: rather
+# than trusting firmware to correctly skip past any stale/orphaned boot
+# entries on its own, explicitly put GRUB's own NVRAM entry first in
+# BootOrder. Some firmware stops at the first boot option that fails to
+# load instead of trying the next one - a device booting straight to
+# firmware setup after a revert is exactly that failure mode. Best-effort:
+# GRUB's own NVRAM entry (created by grub-install) already exists
+# regardless of whether this reordering succeeds, so a failure here must
+# never turn an already-successful revert into a reported failure.
+promote_grub_boot_order() {
+    local grub_efi_path="$1" efibootmgr_v_output="${2-$(efibootmgr -v 2>/dev/null)}"
+    local grub_bootnum
+    grub_bootnum="$(find_grub_efi_bootnum "$efibootmgr_v_output" "$grub_efi_path")"
+    [[ -z "$grub_bootnum" ]] && return 0
+
+    local current_order
+    current_order="${3-$(efibootmgr 2>/dev/null | grep -iE '^BootOrder:' | sed 's/^BootOrder:[[:space:]]*//')}"
+    [[ -z "$current_order" ]] && return 0
+
+    local -a order_list
+    IFS=',' read -ra order_list <<< "$current_order"
+    local new_order="$grub_bootnum" entry
+    for entry in "${order_list[@]}"; do
+        [[ -n "$entry" && "$entry" != "$grub_bootnum" ]] && new_order+=",${entry}"
+    done
+
+    [[ "$new_order" != "$current_order" ]] && run_cmd /usr/bin/efibootmgr -o "$new_order"
     return 0
 }
 
@@ -220,11 +260,42 @@ cmd_revert() {
         return 1
     }
 
+    # Restoring /etc/default/grub MUST happen before grub-install runs, not
+    # after: grub-install itself (not just grub-mkconfig) reads settings
+    # from /etc/default/grub at install time (e.g. GRUB_ENABLE_CRYPTODISK
+    # controls whether cryptodisk support gets baked into the core image).
+    # Running grub-install first meant it only ever saw the
+    # freshly-reinstalled grub package's default config, never the user's
+    # real one - a real ordering bug regardless of which /etc/default/grub
+    # settings the user actually relies on.
+    emit_event "revert_step" "info" "Restoring your original GRUB configuration"
+    restore_grub_files || {
+        emit_event "error" "error" "Failed to restore GRUB configuration files. Limine has NOT been touched; your system still boots via Limine."
+        return 1
+    }
+
     emit_event "revert_step" "info" "Reinstalling GRUB to the EFI system partition"
     local grub_id
     grub_id="$(grub_bootloader_id_from_backup)"
-    run_cmd /usr/bin/grub-install --target=x86_64-efi --efi-directory="$esp_mountpoint" --bootloader-id="$grub_id" || {
+    # --force: allow installing over an existing/foreign bootloader in that
+    # location without refusing. --recheck: re-probe disk devices instead
+    # of trusting any stale device.map, since the disk layout may have
+    # changed since GRUB was last installed here (Limine migration, disk
+    # changes). Both match the known-working manual recipe for this exact
+    # scenario.
+    run_cmd /usr/bin/grub-install --target=x86_64-efi --efi-directory="$esp_mountpoint" --bootloader-id="$grub_id" --force --recheck || {
         emit_event "error" "error" "grub-install failed. Limine has NOT been touched; your system still boots via Limine."
+        return 1
+    }
+
+    # grub.cfg is generated fresh here, not restored from backup: this
+    # discovers whatever kernels/OS state actually exist right now (reading
+    # the just-restored /etc/default/grub for GRUB_CMDLINE_LINUX_DEFAULT
+    # etc.), rather than trusting a snapshot that may be stale relative to
+    # kernel/package updates since migration.
+    emit_event "revert_step" "info" "Generating GRUB configuration"
+    run_cmd /usr/bin/grub-mkconfig -o /boot/grub/grub.cfg || {
+        emit_event "error" "error" "grub-mkconfig failed. Limine has NOT been touched; your system still boots via Limine."
         return 1
     }
 
@@ -256,12 +327,6 @@ cmd_revert() {
         }
     fi
 
-    emit_event "revert_step" "info" "Restoring your original GRUB configuration"
-    restore_grub_files || {
-        emit_event "error" "error" "Failed to restore GRUB configuration files. Limine has NOT been touched; your system still boots via Limine."
-        return 1
-    }
-
     emit_event "revert_step" "info" "Verifying GRUB is installed, configured, and registered"
     if [[ "${DRY_RUN:-0}" != "1" ]] && ! verify_grub_restored "$esp_mountpoint"; then
         emit_event "error" "error" "GRUB could not be verified as restored. Limine has NOT been removed; your system is still bootable via Limine."
@@ -273,6 +338,9 @@ cmd_revert() {
         emit_event "error" "error" "Failed to fully remove Limine. GRUB is restored and bootable; you can remove leftover Limine files manually."
         return 1
     }
+
+    emit_event "revert_step" "info" "Making sure GRUB boots first"
+    promote_grub_boot_order "/EFI/${grub_id}/grubx64.efi" || true
 
     # Post-revert self-check: this is exactly the class of bug a real
     # incident exposed (a stale Limine fallback binary left behind after

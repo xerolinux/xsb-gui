@@ -61,9 +61,6 @@ class WelcomePage(QWizardPage):
 
         layout.addSpacing(8)
 
-        button_row = QHBoxLayout()
-        button_row.setSpacing(28)
-        button_row.addStretch(1)
         self.check_status_button = QPushButton("Check SecureBoot Status")
         self.check_status_button.clicked.connect(self._on_check_status_clicked)
         self.cleanup_button = QPushButton("Clean up ESP")
@@ -73,7 +70,7 @@ class WelcomePage(QWizardPage):
         self.doctor_button = QPushButton("Boot Diagnostics")
         self.doctor_button.clicked.connect(self._on_doctor_clicked)
         # Give every button the same fixed width (the widest one's natural
-        # width, so no label is truncated) for a uniform, evenly-spaced row.
+        # width, so no label is truncated) so both rows align visually.
         self._utility_buttons = (
             self.check_status_button, self.cleanup_button, self.revert_button, self.doctor_button,
         )
@@ -81,9 +78,23 @@ class WelcomePage(QWizardPage):
         for button in self._utility_buttons:
             button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             button.setFixedWidth(uniform_width)
-            button_row.addWidget(button)
-        button_row.addStretch(1)
-        layout.addLayout(button_row)
+
+        top_row = QHBoxLayout()
+        top_row.addStretch(1)
+        top_row.addWidget(self.check_status_button)
+        top_row.addStretch(1)
+        layout.addLayout(top_row)
+
+        layout.addSpacing(10)
+
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(28)
+        bottom_row.addStretch(1)
+        bottom_row.addWidget(self.cleanup_button)
+        bottom_row.addWidget(self.revert_button)
+        bottom_row.addWidget(self.doctor_button)
+        bottom_row.addStretch(1)
+        layout.addLayout(bottom_row)
 
         layout.addStretch(2)
 
